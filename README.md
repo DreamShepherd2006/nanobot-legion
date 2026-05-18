@@ -22,17 +22,17 @@
                     ┌──────────────────────────────────────┐
                     │           Hugging Face Space          │
                     │                                       │
-  浏览器 ────────────▶  Gatekeeper (FastAPI/WS 代理)       │
-  (WebUI)            │    ├─ OAuth / 权限控制               │
-                      │    ├─ HTTP Relay (跨智能体中继)      │
-                      │    └─ WebSocket 代理                 │
-                      │         │         │         │        │
-                      │      Neo(A)  Trinity  Sentinel  ...  │
-                      │    ┌─────────────────────────────┐   │
-                      │    │  squad_bridge.py (WS 通信网)│   │
-                      │    │  squad_config_sync.py       │   │
-                      │    └─────────────────────────────┘   │
-                      └──────────────────────────────────────┘
+  浏览器 ──────────▶│  Gatekeeper (FastAPI/WS 代理)        │
+  (WebUI)           │    ├─ OAuth / 权限控制               │
+                    │    ├─ HTTP Relay (跨智能体中继)       │
+                    │    └─ WebSocket 代理                  │
+                    │         │         │         │         │
+                    │      Neo(A)  Trinity  Sentinel  ...   │
+                    │    ┌─────────────────────────────┐    │
+                    │    │  squad_bridge.py (WS 通信网)│    │
+                    │    │  squad_config_sync.py       │    │
+                    │    └─────────────────────────────┘    │
+                    └──────────────────────────────────────┘
 ```
 
 ## 组件
