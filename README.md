@@ -6,6 +6,16 @@ Multi-agent deployment overlay for [NanoBot](https://github.com/HKUDS/nanobot) �
 
 > *"Legion" — a coordinated group of AI agents, each with specialized roles, working together under a unified command structure.*
 
+## Highlights
+
+| 🎖️ | **Multi-Agent Mesh** — 5 specialized agents (Neo/Trinity/Sentinel/Assistant/Medic) communicate via WebSocket relay. Commander can dispatch tasks, query status, and aggregate results across the legion. |
+|-----|-----|
+| 🔄 | **Self-Healing** — `resurrect_agent.sh` + gatekeeper health monitor: any agent offline for >10s is automatically revived. Zero manual intervention. |
+| 🛡️ | **OAuth + RBAC** — Hugging Face OAuth with three-tier permissions: Commander (admin), Business (agent-bound), Guest (read-only). |
+| 🎨 | **Dynamic WebUI** — Real-time agent status badges (standby/executing/blocked/disconnected), dynamic sidebar roster, cross-agent tab switching. |
+| 🧪 | **Dual-Space CI/CD** — Staging validates latest upstream nightly before cherry-picking to production. No risky direct sync. |
+| 🐳 | **Single Dockerfile** — Runs on Hugging Face Spaces free tier. Multi-stage build patches and merges upstream + legion overlay at build time. |
+
 ## Architecture
 
 ```
