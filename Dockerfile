@@ -1,3 +1,7 @@
+# Nanobot Legion Staging — 多智能体部署层 (上游跟踪)
+# Tracking nanobot v0.2.0 (upstream/nightly e02615c9, 2026-05-18)
+# https://github.com/HKUDS/nanobot/releases/tag/v0.2.0
+
 # 使用高效的 uv 镜像作为基础
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 

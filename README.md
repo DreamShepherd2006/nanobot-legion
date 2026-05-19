@@ -4,6 +4,8 @@
 
 **在线演示**：[军团指挥中心](https://huggingface.co/spaces/DreamShepherd2006/nanobot-multi-agent-nightly)（生产）· [Staging](https://huggingface.co/spaces/DreamShepherd2006/Nanobot-Staging)（验证）
 
+> 🧪 跟踪 [NanoBot v0.2.0](https://github.com/HKUDS/nanobot/releases/tag/v0.2.0)（upstream/nightly [`e02615c9`](https://github.com/HKUDS/nanobot/commit/e02615c9)）
+
 > *"军团" — 一组各司其职的 AI 智能体，在统一指挥下协同作战。*
 
 ## 亮点
