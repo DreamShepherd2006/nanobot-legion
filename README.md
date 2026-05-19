@@ -11,7 +11,7 @@
 | 🎖️ | **多智能体协同** — 5 个专业智能体（Neo/Trinity/Sentinel/Assistant/Medic）通过 WebSocket 互联互通。指挥官可跨节点调度任务、查询状态、汇总结果。 |
 |-----|-----|
 | 🤖 | **自主运维** — Neo（军团指挥官）可自主完成上游版本适配验证：拉取最新代码 → 部署到 Staging → 检查构建/运行日志 → 验证通过后上报，无需人工介入。 |
-| 🔄 | **自愈机制** — `resurrect_agent.sh` + gatekeeper 健康监控：智能体离线超过 10 秒自动复活，无需人工干预。 |
+| 🔄 | **自愈机制** — `resurrect_neo.sh` + Gatekeeper v6.0 健康监控：Neo 离线超过 60 秒自动复活（保守阈值防止 DeepSeek 长时间思考误触发），冷却 300 秒。 |
 | 🛡️ | **OAuth + RBAC** — 基于 Hugging Face OAuth 的三级权限：Commander（管理员）、Member（成员，可对话）、Guest（访客，只读）。 |
 | 🎨 | **动态 WebUI** — 实时智能体状态徽标（待命/执行中/阻塞/离线）、动态侧边栏编制、跨节点标签切换。全部由运行时环境变量驱动，零硬编码。 |
 | 🧪 | **双空间 CI/CD** — Staging 先验证最新上游 nightly，确认通过后再 cherry-pick 到生产 Nightly，避免直接同步风险。 |
