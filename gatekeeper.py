@@ -111,8 +111,125 @@ _default_client = _http_clients.get(WEBUI_AGENT)
 log(f"🌐 HTTP proxy pool: {list(_http_clients.keys())}  (default={WEBUI_AGENT})")
 
 # ═══════════════════════════════════════════════════════════════
-# OAuth (Hugging Face)
+# cluster_log Builder — wraps agent WS events for LegionTerminal
 # ═══════════════════════════════════════════════════════════════
+
+def _build_cluster_log(source: str, raw_data: str) -> Optional[str]:
+    """Convert an agent WS frame into a cluster_log event for LegionTerminal.
+
+    Returns None for events that should not appear in the per-agent log tabs
+    (e.g. connection handshake, heartbeats, session noise).
+    """
+    try:
+        data = json.loads(raw_data)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    event = data.get("event", "")
+
+    # ── Suppressed (handshake / noise) ──
+    if event in ("ready", "attached", "heartbeat", "runtime_model_updated",
+                 "session_updated", "stream_end", "reasoning_end"):
+        return None
+
+    # ── Activity events → compact labels ──
+    if event == "delta":
+        text = data.get("text", "")
+        if not text or not text.strip():
+            return None
+        content = text[:100] + ("…" if len(text) > 100 else "")
+        label = f"{content}"
+    elif event == "reasoning_delta":
+        # Too verbose for a log tab — emit as one-liner activity pulse
+        return None
+    elif event == "turn_start":
+        label = "⚡ turn_start"
+    elif event == "turn_end":
+        label = "✅ turn_end"
+    elif event == "message":
+        text = data.get("text", "")
+        kind = data.get("kind", "")
+        if kind == "tool_hint":
+            label = f"🔧 {text[:100]}"
+        elif kind == "progress":
+            label = f"⏳ {text[:100]}"
+        else:
+            label = f"💬 {text[:120]}"
+    elif event == "error":
+        detail = data.get("detail", "unknown error")
+        label = f"❌ {detail[:120]}"
+    else:
+        # Unknown events — compact
+        label = f"[{event}]"
+
+    return json.dumps({
+        "event": "cluster_log",
+        "type": "cluster_log",
+        "source": source,
+        "content": label,
+    })
+
+
+async def _observer_capture(
+    agent_name: str,
+    info: dict,
+    path: str,
+    token: str,
+    client_ws: WebSocket,
+    stop: asyncio.Event,
+):
+    """Read-only WS capture from one squad agent → cluster_log injector.
+
+    Opens a WS to the agent, captures every inbound event, wraps it with
+    ``_build_cluster_log()``, and sends it to the Commander's WS.  Never
+    sends any messages to the agent — strictly read-only.
+
+    On disconnect, backs off exponentially (2→30 s) and reconnects.
+    Stops immediately when ``stop`` is set (Commander disconnected).
+    """
+    ws_url = f"ws://127.0.0.1:{info['ws_port']}/{path}"
+    if token:
+        ws_url += f"?token={token}"
+
+    backoff = 2
+
+    while not stop.is_set():
+        try:
+            obs_ws = await asyncio.wait_for(
+                websockets.connect(ws_url, close_timeout=5), timeout=15
+            )
+            log(f"👁️ [obs] {agent_name} connected (port {info['ws_port']})")
+            backoff = 2  # reset on success
+
+            async with obs_ws:
+                while not stop.is_set():
+                    try:
+                        data = await asyncio.wait_for(obs_ws.recv(), timeout=60)
+                    except asyncio.TimeoutError:
+                        continue  # keep-alive, no data
+
+                    if isinstance(data, bytes):
+                        data = data.decode("utf-8", errors="replace")
+
+                    cluster = _build_cluster_log(agent_name, data)
+                    if cluster:
+                        try:
+                            await client_ws.send_text(cluster)
+                        except Exception:
+                            return  # Commander disconnected
+
+        except asyncio.TimeoutError:
+            log(f"👁️ [obs] {agent_name} connect timeout, retry {backoff}s")
+        except websockets.exceptions.ConnectionClosed as e:
+            log(f"👁️ [obs] {agent_name} WS closed ({e.code}), retry {backoff}s")
+        except Exception as e:
+            log(f"👁️ [obs] {agent_name} error: {type(e).__name__}: {e}, retry {backoff}s")
+
+        if stop.is_set():
+            break
+        await asyncio.sleep(backoff)
+        backoff = min(backoff * 2, 30)
+
 
 # ═══════════════════════════════════════════════════════════════
 # OAuth (Hugging Face)
@@ -508,12 +625,24 @@ async def squad_relay(request: Request):
         }, status_code=502)
 
 # ═══════════════════════════════════════════════════════════════
-# WebSocket Proxy (for WebUI)
+# WebSocket Proxy — Multiplexer v6.0 (multi-agent + cluster_log inject)
 # ═══════════════════════════════════════════════════════════════
 
 @app.websocket("/{path:path}")
 async def ws_proxy(path: str, client_ws: WebSocket):
-    """Relay WebUI WebSocket connections to target agent's ws_port."""
+    """Multiplex Commander's WS to neo (bidirectional) + all squad agents (read-only).
+
+    Architecture::
+
+        Commander ──WS──▶ Gatekeeper ──WS──▶ neo (双向, Commander 对话)
+                                ├──WS──▶ trinity (只读捕获)
+                                ├──WS──▶ sentinel (只读捕获)
+                                ├──WS──▶ assistant (只读捕获)
+                                └──WS──▶ medic (只读捕获)
+
+    Other agents' events are wrapped as ``cluster_log`` with ``source`` tags so
+    the LegionTerminal component can route them to per-agent log tabs.
+    """
     await client_ws.accept()
 
     # ── Session & identity ──────────────────────────────────
@@ -543,51 +672,110 @@ async def ws_proxy(path: str, client_ws: WebSocket):
             "logs": [], "messages": [], "history": [],
         }))
 
-    # ── Route to agent ──────────────────────────────────────
-    target_agent = get_agent_for_user(real_name)
-    target_info = SQUAD_ROSTER.get(target_agent, SQUAD_ROSTER.get(WEBUI_AGENT, {}))
-    ws_url = f"ws://127.0.0.1:{target_info['ws_port']}/{path}?user={uname}"
-    log(f"🔀 WS 路由: {real_name} → {target_agent} (port {target_info.get('ws_port','?')} path /{path})")
+    # ── Determine primary agent ─────────────────────────────
+    primary_agent = get_agent_for_user(real_name)
+    primary_info = SQUAD_ROSTER.get(primary_agent, SQUAD_ROSTER.get(WEBUI_AGENT, {}))
+    nanobot_token = os.environ.get("NANOBOT_TOKEN", "").strip()
 
+    # ── Connect to primary agent (neo) ──────────────────────
+    neo_url = f"ws://127.0.0.1:{primary_info['ws_port']}/{path}"
+    if nanobot_token:
+        neo_url += f"?token={nanobot_token}"
+    log(f"🔀 WS 路由: {real_name} → {primary_agent} (port {primary_info.get('ws_port','?')} path /{path})")
+
+    neo_ws = None
     try:
-        agent_ws = await asyncio.wait_for(
-            websockets.connect(ws_url, close_timeout=5), timeout=15
+        neo_ws = await asyncio.wait_for(
+            websockets.connect(neo_url, close_timeout=5), timeout=15
         )
-        try:
-            async def client_to_agent():
-                try:
-                    while True:
-                        data = await client_ws.receive_text()
-                        await agent_ws.send(data)
-                except (WebSocketDisconnect, Exception):
-                    pass
-
-            async def agent_to_client():
-                try:
-                    while True:
-                        data = await agent_ws.recv()
-                        if isinstance(data, bytes):
-                            data = data.decode("utf-8", errors="replace")
-                        await client_ws.send_text(data)
-                except (websockets.exceptions.ConnectionClosed, Exception):
-                    pass
-
-            await asyncio.gather(client_to_agent(), agent_to_client())
-        finally:
-            try:
-                await agent_ws.close()
-            except Exception:
-                pass
     except asyncio.TimeoutError:
-        log(f"🔌 [WS Proxy] {uname}→{target_agent} connect timeout")
+        log(f"🔌 [WS Proxy] {uname}→{primary_agent} connect timeout")
         try:
             await client_ws.close(code=4003, reason="agent connect timeout")
         except Exception:
             pass
+        return
     except Exception as e:
-        log(f"🔌 [WS Proxy] {uname}→{target_agent} error: {e}")
+        log(f"🔌 [WS Proxy] {uname}→{primary_agent} error: {e}")
         try:
             await client_ws.close()
+        except Exception:
+            pass
+        return
+
+    # ── Start observer capture loops for all OTHER agents ───
+    observer_stop = asyncio.Event()
+    observer_tasks: list[asyncio.Task] = []
+    for name, info in SQUAD_ROSTER.items():
+        if name == primary_agent:
+            continue
+        task = asyncio.create_task(
+            _observer_capture(name, info, path, nanobot_token, client_ws, observer_stop)
+        )
+        observer_tasks.append(task)
+    if observer_tasks:
+        log(f"👁️ [WS Proxy] {len(observer_tasks)} observer capture loops started")
+
+    # ── Periodic legion_update re-emission ──────────────────
+    async def _emit_legion_update_periodic():
+        while not observer_stop.is_set():
+            await asyncio.sleep(5)
+            try:
+                await client_ws.send_text(json.dumps({
+                    "event": "legion_update", "type": "legion_update",
+                    "data": dict(legion_status),
+                    "roster": {
+                        a: {"id": i["id"], "name": a,
+                            "gateway_port": i.get("gateway_port"),
+                            "ws_port": i.get("ws_port")}
+                        for a, i in SQUAD_ROSTER.items()
+                    },
+                    "logs": [], "messages": [], "history": [],
+                }))
+            except Exception:
+                break
+    periodic_task = asyncio.create_task(_emit_legion_update_periodic())
+
+    # ── Bidirectional proxy with neo + cluster_log inject ───
+    try:
+        async def client_to_neo():
+            """Commander → neo (unchanged)."""
+            try:
+                while True:
+                    data = await client_ws.receive_text()
+                    await neo_ws.send(data)
+            except (WebSocketDisconnect, Exception):
+                pass
+
+        async def neo_to_client():
+            """neo → Commander + cluster_log for LegionTerminal."""
+            try:
+                while True:
+                    data = await neo_ws.recv()
+                    if isinstance(data, bytes):
+                        data = data.decode("utf-8", errors="replace")
+                    # 1) passthrough to Commander's WebUI
+                    await client_ws.send_text(data)
+                    # 2) also inject as cluster_log for LegionTerminal
+                    cluster = _build_cluster_log(primary_agent, data)
+                    if cluster:
+                        try:
+                            await client_ws.send_text(cluster)
+                        except Exception:
+                            pass
+            except (websockets.exceptions.ConnectionClosed, Exception):
+                pass
+
+        await asyncio.gather(client_to_neo(), neo_to_client())
+
+    finally:
+        # ── Teardown ────────────────────────────────────────
+        observer_stop.set()
+        periodic_task.cancel()
+        for t in observer_tasks:
+            t.cancel()
+        try:
+            await neo_ws.close()
         except Exception:
             pass
 
