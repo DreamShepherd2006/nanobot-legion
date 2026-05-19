@@ -53,9 +53,11 @@
 
 | 补丁 | 目标 | 作用 |
 |------|------|------|
-| `patch_sidebar_ui_v6.py` | `webui/src/` | 动态智能体编制侧边栏 + 状态徽标 |
-| `patch_app_logic_v4.py` | `webui/src/` | 军团消息拦截器 |
-| `patch_bootstrap_peers.py` | `nanobot/channels/websocket.py` | 通过 `/webui/bootstrap` 暴露节点编制 |
+| `patch_legion_v6_sidebar.py` | `webui/src/components/Sidebar.tsx` | v0.2.0 适配 — 注入 LegionRoster 部件（动态编制 + 状态徽标） |
+| `patch_legion_v4_client.py` | `webui/src/NanobotClient.tsx` | v0.2.0 适配 — 注入 onAnyEvent 拦截器（军团事件路由） |
+| `patch_sidebar_ui_v6.py` | `webui/src/` | 旧版 Sidebar 补丁（v0.1.x 系列） |
+| `patch_app_logic_v4.py` | `webui/src/` | 旧版 App 逻辑补丁（v0.1.x 系列） |
+| `patch_bootstrap_peers.py` | `nanobot/channels/websocket.py` | WS `peers_update` 事件 — 连接认证后推送节点编制 |
 | `patch_message_hardening.py` | `nanobot/providers/` | DeepSeek 消息内容清洗 |
 | `patch_squad_error_events.py` | `nanobot/channels/websocket.py` | 为 squad bridge 提供结构化错误事件 |
 
@@ -77,4 +79,4 @@ MIT — 继承自[上游](https://github.com/HKUDS/nanobot/blob/nightly/LICENSE)
 ## 相关链接
 
 - 上游项目：[HKUDS/nanobot](https://github.com/HKUDS/nanobot)
-- 上游 PR：[#3854](https://github.com/HKUDS/nanobot/pull/3854)（节点编制）· [#3869](https://github.com/HKUDS/nanobot/pull/3869)（消息清洗）· [#3891](https://github.com/HKUDS/nanobot/pull/3891)（远程启动访问）
+- 上游 PR：[#3854](https://github.com/HKUDS/nanobot/pull/3854)（节点编制，已关闭）· [#3869](https://github.com/HKUDS/nanobot/pull/3869)（消息清洗）· [#3908](https://github.com/HKUDS/nanobot/pull/3908)（WS peers_update 事件）
