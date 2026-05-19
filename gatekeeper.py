@@ -82,6 +82,24 @@ if not WEBUI_AGENT or WEBUI_AGENT not in SQUAD_ROSTER:
     WEBUI_AGENT = AGENT_NAMES[0] if AGENT_NAMES else "neo"
     log(f"📡 WEBUI_AGENT 未指定或无效，回退到: {WEBUI_AGENT}")
 
+# ── Nanobot version ──────────────────────────────────────────
+def _get_nanobot_version() -> str:
+    """Read nanobot version from installed package or pyproject.toml."""
+    try:
+        from nanobot import __version__
+        return __version__
+    except Exception:
+        pass
+    try:
+        import tomllib
+        with open("/app/pyproject.toml", "rb") as f:
+            return tomllib.load(f).get("project", {}).get("version", "unknown")
+    except Exception:
+        return "unknown"
+
+NANOBOT_VERSION = _get_nanobot_version()
+log(f"📦 nanobot version: {NANOBOT_VERSION}")
+
 def get_agent_for_user(username: str) -> str:
     """返回该 HF 用户对应的 agent name；未匹配或 Commander → WEBUI_AGENT"""
     if not username or username == "Unknown":
@@ -731,6 +749,7 @@ async def ws_proxy(path: str, client_ws: WebSocket):
         await client_ws.send_text(json.dumps({
             "event": event_type, "type": event_type,
             "data": legion_status,
+            "nanobot_version": NANOBOT_VERSION,
             "roster": {
                 a: {"id": info["id"], "name": a,
                     "gateway_port": info.get("gateway_port"),
@@ -792,6 +811,7 @@ async def ws_proxy(path: str, client_ws: WebSocket):
                 await client_ws.send_text(json.dumps({
                     "event": "legion_update", "type": "legion_update",
                     "data": dict(legion_status),
+                    "nanobot_version": NANOBOT_VERSION,
                     "roster": {
                         a: {"id": i["id"], "name": a,
                             "gateway_port": i.get("gateway_port"),
