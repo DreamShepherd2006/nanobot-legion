@@ -1,4 +1,8 @@
-# 使用高效的 uv 镜像作为基础
+# Nanobot Legion — 多智能体部署层
+# Based on nanobot v0.1.5.post3 (tag v0.1.5.post3, commit 0b1631f3)
+# https://github.com/HKUDS/nanobot/releases/tag/v0.1.5.post3
+
+ # 使用高效的 uv 镜像作为基础
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 # 1. 基础环境安装 (针对军团协作优化)
