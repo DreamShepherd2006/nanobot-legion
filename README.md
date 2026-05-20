@@ -47,7 +47,7 @@
 |------|------|
 | `gatekeeper.py` | OAuth 网关，三级权限控制，HTTP/WS 代理，跨智能体中继 |
 | `squad_bridge.py` | 智能体之间 WebSocket 消息通信网 |
-| `squad_config_sync.py` | 实例配置动态同步 |
+| `squad_config_sync.py` | 实例配置动态同步。**新 agent 从模板创建**，已有 agent 仅同步动态端口与白名单（不触碰 provider/model/ssrf）。**修改前自动备份**（`config.json.backup.{timestamp}`），保留最近 5 份。 |
 | `Dockerfile` | 多阶段构建，合并上游 nanobot + 军团部署层 |
 | `entrypoint.sh` | 运行时初始化，实例模板下发 |
 

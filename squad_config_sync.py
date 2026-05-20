@@ -8,16 +8,44 @@
 - sync_configs() → 写 agent config.json，供 entrypoint.sh 调用
 """
 
-import os, json, glob, sys
+import os, json, glob, sys, shutil
 from pathlib import Path
 from datetime import datetime
 from copy import deepcopy
 
 TEMPLATE = "/data/instances/_template/config.json"
 INSTANCES_ROOT = "/data/instances"
+MAX_BACKUPS = 5  # keep last N backups per agent
 
 def _log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def _backup_config(cfg_path: str, inst_name: str) -> str | None:
+    """
+    修改前备份: config.json → config.json.backup.{timestamp}
+    保留最近 MAX_BACKUPS 份，自动清理旧备份。
+    返回备份文件路径，失败返回 None。
+    """
+    inst_dir = os.path.dirname(cfg_path)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    bak_name = f"config.json.backup.{ts}"
+    bak_path = os.path.join(inst_dir, bak_name)
+    try:
+        shutil.copy2(cfg_path, bak_path)
+        # 清理旧备份：只保留最近 N 份
+        all_baks = sorted(
+            [f for f in os.listdir(inst_dir) if f.startswith("config.json.backup.")],
+            reverse=True,
+        )
+        for old in all_baks[MAX_BACKUPS:]:
+            try:
+                os.unlink(os.path.join(inst_dir, old))
+            except OSError:
+                pass
+        return bak_name
+    except Exception:
+        return None
 
 # ═══ 1. 纯函数：env → squad dict（无副作用） ═══════════════════
 
@@ -82,8 +110,8 @@ def _build_allowed_env_keys():
 def sync_configs():
     """
     从 NANOBOT_PEER_* 创建/同步各 agent 的 config.json。
-    - 新 agent：从模板 deepcopy → patch 端口 → 写入
-    - 已有 agent：同步 gateway.port
+    - 新 agent：从模板 deepcopy → patch 端口 → 写入（模板只在新 agent 时生效）
+    - 已有 agent：仅同步 gateway.port + allowed_env_keys（不触碰模板字段）
     无返回值 — 结果直接落盘到 /data/instances/{name}/config.json
     """
     _log("🛡️ Squad Config Sync v4.0 — 军团端口配置中心")
@@ -159,9 +187,11 @@ def sync_configs():
         inst_name = os.path.basename(os.path.dirname(cfg_path))
 
         try:
-            # Atomic write: read → patch → write to .tmp → os.replace
+            # Read + backup before any modification
             with open(cfg_path, "r") as f:
                 cfg = json.load(f)
+
+            bak = _backup_config(cfg_path, inst_name)
 
             # --- Squad config sanitization ---
             # Fix corrupted configs that may have root-level keys from hotfix mismatches.
@@ -189,18 +219,9 @@ def sync_configs():
             merged = sorted(existing | set(allowed))
             exec_cfg["allowed_env_keys"] = merged
 
-            # Sync provider/model from template (ensure template updates reach running agents)
-            if template:
-                default_provider = template.get("agents", {}).get("defaults", {}).get("provider")
-                default_model = template.get("agents", {}).get("defaults", {}).get("model")
-                providers = template.get("providers", {})
-                agents_cfg = cfg.setdefault("agents", {}).setdefault("defaults", {})
-                if default_provider:
-                    agents_cfg["provider"] = default_provider
-                if default_model:
-                    agents_cfg["model"] = default_model
-                if providers:
-                    cfg["providers"] = providers
+            # ── NOTE: 模板仅用于创建新 agent，不 merge 到已有 agent ──
+            # ssrf_whitelist / provider / model 等配置由 Commander 手动管理。
+            # 如需批量修改已有 agent，使用专门的运维命令，而非依赖模板自动覆盖。
 
             tmp_path = cfg_path + ".tmp"
             with open(tmp_path, "w") as f:
