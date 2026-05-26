@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Gatekeeper v6.0 (Auto-Resurrect) — HTTP proxy + WS interceptor + squad relay.
+Gatekeeper v5.0 (DLQ Replay) — HTTP proxy + WS interceptor + squad relay.
 Deployed on ws_port, serves WebUI and routes squad traffic.
-Includes legion_monitor with automatic resurrection for whitelisted agents.
 """
 
 import datetime
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import asyncio
@@ -84,18 +84,30 @@ if not WEBUI_AGENT or WEBUI_AGENT not in SQUAD_ROSTER:
 
 # ── Nanobot version ──────────────────────────────────────────
 def _get_nanobot_version() -> str:
-    """Read nanobot version from installed package or pyproject.toml."""
+    """Read nanobot version from installed package + commit SHA."""
+    ver = "unknown"
     try:
         from nanobot import __version__
-        return __version__
+        ver = __version__
     except Exception:
         pass
+    if ver == "unknown":
+        try:
+            import tomllib
+            with open("/app/pyproject.toml", "rb") as f:
+                ver = tomllib.load(f).get("project", {}).get("version", "unknown")
+        except Exception:
+            pass
+    # Append commit SHA
+    commit = ""
     try:
-        import tomllib
-        with open("/app/pyproject.toml", "rb") as f:
-            return tomllib.load(f).get("project", {}).get("version", "unknown")
+        with open("/app/NANOBOT_COMMIT") as f:
+            raw = f.read().strip()
+        if raw and raw != "unknown":
+            commit = raw[:8]
     except Exception:
-        return "unknown"
+        pass
+    return f"{ver} ({commit})" if commit else ver
 
 NANOBOT_VERSION = _get_nanobot_version()
 log(f"📦 nanobot version: {NANOBOT_VERSION}")
@@ -295,41 +307,21 @@ class ForceAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 # ═══════════════════════════════════════════════════════════════
-# Legion Monitor (agent alive/dead tracking + auto-resurrection)
+# Legion Monitor (agent alive/dead tracking)
 # ═══════════════════════════════════════════════════════════════
 
 legion_status: dict[str, str] = {}  # agent → "online"|"offline"
 _legion_offline_since: dict[str, float] = {}  # agent → timestamp
-_resurrecting: dict[str, bool] = {}  # agent → resurrection in progress
-
-# Resurrection thresholds (conservative — DeepSeek thinking blocks event loop 30-60s)
-RESURRECT_WHITELIST = {"neo"}  # only Neo is whitelisted for auto-resurrection
-RESURRECT_THRESHOLD = 60       # seconds of continuous offline before trigger
-RESURRECT_COOLDOWN = 300       # seconds before retry after failed resurrection
+latest_tasks: dict = {}  # latest task payload from Commander
 
 # Startup grace period — allow agents time to boot before monitoring
-GRACE_SECONDS = 60
+GRACE_SECONDS = 150
 _gatekeeper_boot_time = time.time()
-_grace_ended = False
-_grace_until = _gatekeeper_boot_time + GRACE_SECONDS
 
 async def legion_monitor():
-    """Periodically health-check each agent's gateway_port.
-    Triggers auto-resurrection for whitelisted agents after THRESHOLD."""
+    """Periodically health-check each agent's gateway_port."""
     await asyncio.sleep(GRACE_SECONDS)
-    _grace_ended = True
-    log(f"🛡️ 复活引擎就绪 (宽限期 {GRACE_SECONDS}s 结束)")
     while True:
-        now = time.time()
-
-        # ── Cooldown expiry: allow retry for resurrecting agents ──
-        for name in list(_resurrecting.keys()):
-            if _resurrecting[name] and name in _legion_offline_since:
-                if now - _legion_offline_since[name] > RESURRECT_COOLDOWN:
-                    log(f"⏰ [{name}] 复活冷却到期，允许重试")
-                    _resurrecting[name] = False
-                    _legion_offline_since.pop(name, None)
-
         for name in AGENT_NAMES:
             info = SQUAD_ROSTER.get(name)
             if not info:
@@ -342,67 +334,21 @@ async def legion_monitor():
                     resp = await client.get(f"http://127.0.0.1:{gw_port}/health")
                 if resp.status_code == 200:
                     if legion_status.get(name) == "offline":
-                        offline_sec = now - _legion_offline_since.get(name, 0)
+                        offline_sec = time.time() - _legion_offline_since.get(name, 0)
                         log(f"✅ [{name}] 恢复上线 (离线 {offline_sec:.0f}s)")
                     legion_status[name] = "online"
                     _legion_offline_since.pop(name, None)
-                    if _resurrecting.get(name):
-                        _resurrecting[name] = False
                 else:
-                    _mark_offline(name, f"HTTP {resp.status_code}", now)
+                    _mark_offline(name, f"HTTP {resp.status_code}")
             except Exception as e:
-                _mark_offline(name, str(e), now)
-
+                _mark_offline(name, str(e))
         await asyncio.sleep(10)
 
-def _mark_offline(name: str, reason: str, now: float = None):
-    if now is None:
-        now = time.time()
+def _mark_offline(name: str, reason: str):
     if legion_status.get(name) != "offline":
         legion_status[name] = "offline"
-        _legion_offline_since[name] = now
+        _legion_offline_since[name] = time.time()
         log(f"🔴 [{name}] 掉线 → {reason}")
-        return
-
-    # Already offline — check if resurrection should trigger
-    if name not in RESURRECT_WHITELIST:
-        return
-    if _resurrecting.get(name):
-        return  # already in progress
-
-    elapsed = now - _legion_offline_since.get(name, now)
-    if elapsed < RESURRECT_THRESHOLD:
-        return  # not yet past threshold
-
-    script = _find_resurrection_script(name)
-    if not script:
-        log(f"⚠️ [{name}] 失联 {elapsed:.0f}s 但无复活脚本")
-        _legion_offline_since.pop(name, None)
-        return
-
-    _resurrecting[name] = True
-    log(f"🆘 [{name}] 失联 {elapsed:.0f}s，触发自动复活 → {script}")
-    try:
-        subprocess.Popen(
-            ["setsid", "bash", script],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception as e:
-        log(f"❌ [{name}] 复活启动失败: {e}")
-        _resurrecting[name] = False
-
-def _find_resurrection_script(name: str) -> Optional[str]:
-    """Find the resurrection script for an agent, checking both
-    /app/scripts/ (Docker-deployed) and /data/ (persistent volume)."""
-    candidates = [
-        f"/app/scripts/resurrect_{name}.sh",
-        f"/data/instances/{name}/workspace/scripts/resurrect_{name}.sh",
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            return path
-    return None
 
 # ═══════════════════════════════════════════════════════════════
 # Log Bridge (capture gateway logs → gatekeeper stdout)
@@ -461,7 +407,7 @@ async def dlq_replay():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log(f"🛡️ Gatekeeper v6.0 (Auto-Resurrect) online — {len(AGENT_NAMES)} agents.")
+    log(f"🛡️ Gatekeeper v5.0 (DLQ Replay) online — {len(AGENT_NAMES)} agents.")
     asyncio.create_task(legion_monitor())
     asyncio.create_task(log_bridge())
     asyncio.create_task(dlq_replay())
@@ -711,6 +657,43 @@ async def squad_relay(request: Request):
         }, status_code=502)
 
 # ═══════════════════════════════════════════════════════════════
+# Squad Task Tracking Endpoint
+# ═══════════════════════════════════════════════════════════════
+
+@app.post("/api/squad/tasks")
+async def squad_tasks(request: Request):
+    """POST /api/squad/tasks — Commander pushes structured task list to all WebUI clients."""
+    auth_header = request.headers.get("X-Squad-Token", "")
+    if not RELAY_TOKEN or auth_header != RELAY_TOKEN:
+        return JSONResponse({"status": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"status": "bad_request", "error": "invalid JSON"}, status_code=400)
+    goal = body.get("goal", "")
+    tasks = body.get("tasks", [])
+    if not isinstance(tasks, list):
+        return JSONResponse({"status": "bad_request", "error": "tasks must be a list"}, status_code=400)
+    global latest_tasks
+    latest_tasks = {
+        "goal": goal,
+        "tasks": tasks,
+        "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "updated_by": body.get("updated_by", "unknown"),
+    }
+    done = sum(1 for t in tasks if t.get("status") == "done")
+    log(f"📋 [Tasks] {done}/{len(tasks)} → {[t.get('title','?') for t in tasks[:5]]}")
+    return JSONResponse({"status": "ok", "tasks": len(tasks), "done": done})
+
+@app.get("/api/squad/tasks")
+async def squad_tasks_get(request: Request):
+    """GET /api/squad/tasks — read current task list (for Neo agent to query before updating)."""
+    auth_header = request.headers.get("X-Squad-Token", "")
+    if not RELAY_TOKEN or auth_header != RELAY_TOKEN:
+        return JSONResponse({"status": "unauthorized"}, status_code=401)
+    return JSONResponse(latest_tasks or {"goal": "", "tasks": [], "updated_by": "none"})
+
+# ═══════════════════════════════════════════════════════════════
 # WebSocket Proxy — Multiplexer v6.0 (multi-agent + cluster_log inject)
 # ═══════════════════════════════════════════════════════════════
 
@@ -757,6 +740,7 @@ async def ws_proxy(path: str, client_ws: WebSocket):
                 for a, info in SQUAD_ROSTER.items()
             },
             "logs": [], "messages": [], "history": [],
+            "tasks": latest_tasks,
         }))
 
     # ── Determine primary agent ─────────────────────────────
@@ -819,6 +803,7 @@ async def ws_proxy(path: str, client_ws: WebSocket):
                         for a, i in SQUAD_ROSTER.items()
                     },
                     "logs": [], "messages": [], "history": [],
+                    "tasks": latest_tasks,
                 }))
             except Exception:
                 break

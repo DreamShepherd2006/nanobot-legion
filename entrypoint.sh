@@ -89,13 +89,13 @@ if [ -d "$MOUNT_PATH" ]; then
 fi
 
 # 模板恢复: 每次启动强制覆盖（确保模板更新生效）
-if [ -d "/app/template" ]; then
+if [ -d "/app/instances/_template" ]; then
     mkdir -p "/data/instances"
     rm -rf /data/instances/_template
-    cp -r /app/template /data/instances/_template
+    cp -r /app/instances/_template /data/instances/_template
     echo "🔄 [Template] 模板已从镜像强制同步: /data/instances/_template/"
 else
-    echo "⚠️ [Template] 镜像内无备份 (/app/template) — agent 将跳过"
+    echo "⚠️ [Template] 镜像内无备份 (/app/instances/_template) — agent 将跳过"
 fi
 
 # ---------------------------------------------------------
@@ -131,6 +131,12 @@ launch_agent() {
 
     local log_dir="/data/instances/$name/workspace/logs"
     mkdir -p "$workspace" "$log_dir"
+
+    # 注入军团知识 (neo workspace files)
+    if [ "$name" = "neo" ] && [ -d "/app/instances/neo-workspace" ]; then
+        cp -r /app/instances/neo-workspace/* "$workspace/"
+        echo "🧠 [$name] 军团知识已注入"
+    fi
 
     if [ -f "$config" ]; then
         echo "🚀 [$name] 启动中 (Port: $port)..."
