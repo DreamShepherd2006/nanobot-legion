@@ -54,28 +54,6 @@ else
     echo "   ℹ️  SQUAD_LEGION 已手动定义，跳过自推导"
 fi
 
-# ---------------------------------------------------------
-# 💡 步骤 A1：验证 + 注入 bootstrap peers 补丁 (runtime)
-# ---------------------------------------------------------
-echo "🔍 [A1 Diag] 检查 websocket.py 补丁状态..."
-WEBSOCKET_PY="/usr/local/lib/python3.12/site-packages/nanobot/channels/websocket.py"
-if [ -f "$WEBSOCKET_PY" ]; then
-    if grep -q "_read_peers" "$WEBSOCKET_PY"; then
-        echo "✅ [A1] _read_peers 已注入，跳过补丁"
-    else
-        echo "⚠️  [A1] _read_peers 未找到，尝试注入..."
-        if [ -f "/tmp/patch_bootstrap_peers.py" ]; then
-            python3 /tmp/patch_bootstrap_peers.py && echo "✅ [A1] Runtime 补丁完成" || echo "❌ [A1] Runtime 补丁失败"
-        else
-            echo "❌ [A1] /tmp/patch_bootstrap_peers.py 不存在"
-        fi
-    fi
-else
-    echo "❌ [A1] $WEBSOCKET_PY 不存在"
-    echo "   > 搜索所有 websocket.py:"
-    find / -name "websocket.py" -path "*/nanobot/*" 2>/dev/null || echo "   (无结果)"
-fi
-
 # 2. 存储初始化逻辑
 echo "🔍 [Storage] 正在检查持久化存储..."
 # 清理残留文件（防止 NotADirectoryError）

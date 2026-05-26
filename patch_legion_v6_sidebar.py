@@ -8,7 +8,7 @@ Dual-target NOT required: WebUI .tsx patches are compiled into dist/,
 only the /app/webui/src/ copy matters before the Vite build step.
 
 Injections:
-  1. Add imports (useEffect, useMemo, useCallback, useRef, createPortal, useClient)
+  1. Add imports (useEffect, useMemo, useState, createPortal, useClient)
   2. LegionRoster component (agent status badges)
   3. LegionTerminal component (log portal via createPortal)
   4. In Sidebar: console state + event capture useEffect
@@ -467,11 +467,11 @@ def patch_sidebar():
         print(f"  [{PATCH_LABEL}] anchor import not found — skip")
         return False
 
-    expanded_import = 'import { useEffect, useMemo, useCallback, useRef, useState, type ReactNode } from "react";'
+    expanded_import = 'import { useEffect, useMemo, useState, type ReactNode } from "react";'
     if expanded_import != anchor_import:
         if "useEffect" not in content.split("\n")[0]:
             content = content.replace(anchor_import, expanded_import, 1)
-            print(f"  [{PATCH_LABEL}] expanded react imports (useEffect, useMemo, useCallback, useRef)")
+            print(f"  [{PATCH_LABEL}] expanded react imports (useEffect, useMemo)")
         else:
             print(f"  [{PATCH_LABEL}] react imports already expanded")
 

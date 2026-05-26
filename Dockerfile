@@ -45,11 +45,9 @@ RUN python3 /tmp/patch_legion_v4_client.py && \
 RUN uv pip install --system --no-cache .
 
 # ── 7. Legion: Python runtime patches (AFTER full install — site-packages now populated) ──
-COPY patch_bootstrap_peers.py /tmp/
 COPY patch_message_hardening.py /tmp/
 COPY patch_squad_error_events.py /tmp/
-RUN python3 /tmp/patch_bootstrap_peers.py && \
-    python3 /tmp/patch_message_hardening.py && \
+RUN python3 /tmp/patch_message_hardening.py && \
     python3 /tmp/patch_squad_error_events.py && \
     echo "✅ runtime patches applied"
 
