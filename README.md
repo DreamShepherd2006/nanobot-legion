@@ -59,9 +59,10 @@
 |------|------|------|
 | `patch_legion_v6_sidebar.py` | `webui/src/components/Sidebar.tsx` | 注入 LegionRoster + LegionTerminal 组件（动态编制、状态徽标、任务追踪面板） |
 | `patch_legion_v4_client.py` | `webui/src/NanobotClient.tsx` | 注入 onAnyEvent 拦截器（`legion_update` / `cluster_log` / `task_update` 事件路由） |
-| `patch_bootstrap_peers.py` | `nanobot/channels/websocket.py` | WS `peers_update` 事件 — 连接认证后推送节点编制 |
 | `patch_message_hardening.py` | `nanobot/providers/openai_compat_provider.py` | DeepSeek 消息内容清洗（移除 "(empty)" 占位符、保留 tool_calls 下的文本） |
 | `patch_squad_error_events.py` | `nanobot/channels/websocket.py` | squad bridge 权限错误事件发射（双目标：`/app/` + `site-packages/`） |
+
+> ⚠️ `patch_bootstrap_peers.py` 已移除（上游 v0.2.0 已原生支持 `_read_peers`，该补丁无消费者，属于死代码）。
 
 **旧版补丁（v0.1.x 系列，v0.2.0 中不可用）：**
 
@@ -93,11 +94,16 @@ MIT — 继承自[上游](https://github.com/HKUDS/nanobot/blob/nightly/LICENSE)
 
 ## 最近更新
 
+`0f449cc` — 2026-05-26
+
+- 🧹 移除 `patch_bootstrap_peers.py`（死代码，上游已原生支持）
+- 🐛 修复 TS6133：v6 sidebar 补丁移除未使用的 `useCallback`/`useRef` import
+- 📝 补丁表精简至 4 个活跃补丁
+
 `44fb9bd` — 2026-05-26
 
 - 上游追踪: `nanobot v0.2.0` (commit `92f2ff3a`)
 - gatekeeper: ModelScope OAuth 解析修复、GRACE_SECONDS 150、`import subprocess`
 - entrypoint: neo workspace 知识注入 + 运行时补丁注入
-- patch_bootstrap_peers: v5.0 peers_update WS 事件
 - patch_legion_v6_sidebar: 完整 LegionTerminal 组件
 - patch_squad_error_events: 双目标补丁 + 备份
