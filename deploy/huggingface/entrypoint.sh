@@ -55,26 +55,23 @@ else
 fi
 
 # ---------------------------------------------------------
-# 💡 步骤 A1：验证 + 注入 bootstrap peers 补丁 (runtime)
+# 💡 步骤 A2：持久化工作区补丁注入 (runtime, 不依赖 Dockerfile)
 # ---------------------------------------------------------
-echo "🔍 [A1 Diag] 检查 websocket.py 补丁状态..."
-WEBSOCKET_PY="/usr/local/lib/python3.12/site-packages/nanobot/channels/websocket.py"
-if [ -f "$WEBSOCKET_PY" ]; then
-    if grep -q "_read_peers" "$WEBSOCKET_PY"; then
-        echo "✅ [A1] _read_peers 已注入，跳过补丁"
+echo "💉 [A2] 正在从持久化工作区注入运行时补丁..."
+PATCH_DIR="/data/instances/neo/workspace/deploy/huggingface"
+PATCHES_APPLIED=0
+for PATCH_SCRIPT in \
+    "patch_message_hardening.py" \
+    "patch_squad_error_events.py"; do
+    if [ -f "$PATCH_DIR/$PATCH_SCRIPT" ]; then
+        python3 "$PATCH_DIR/$PATCH_SCRIPT" && \
+            echo "   ✅ $PATCH_SCRIPT 完成" && PATCHES_APPLIED=$((PATCHES_APPLIED + 1)) || \
+            echo "   ❌ $PATCH_SCRIPT 失败"
     else
-        echo "⚠️  [A1] _read_peers 未找到，尝试注入..."
-        if [ -f "/tmp/patch_bootstrap_peers.py" ]; then
-            python3 /tmp/patch_bootstrap_peers.py && echo "✅ [A1] Runtime 补丁完成" || echo "❌ [A1] Runtime 补丁失败"
-        else
-            echo "❌ [A1] /tmp/patch_bootstrap_peers.py 不存在"
-        fi
+        echo "   ⚠️  $PATCH_DIR/$PATCH_SCRIPT 不存在，跳过"
     fi
-else
-    echo "❌ [A1] $WEBSOCKET_PY 不存在"
-    echo "   > 搜索所有 websocket.py:"
-    find / -name "websocket.py" -path "*/nanobot/*" 2>/dev/null || echo "   (无结果)"
-fi
+done
+echo "   📊 共应用 $PATCHES_APPLIED 个运行时补丁"
 
 # 2. 存储初始化逻辑
 echo "🔍 [Storage] 正在检查持久化存储..."
@@ -88,14 +85,17 @@ if [ -d "$MOUNT_PATH" ]; then
     echo "✅ [Storage] 持久化存储已链接"
 fi
 
-# 模板恢复: 每次启动强制覆盖（确保模板更新生效）
-if [ -d "/app/template" ]; then
-    mkdir -p "/data/instances"
-    rm -rf /data/instances/_template
-    cp -r /app/template /data/instances/_template
-    echo "🔄 [Template] 模板已从镜像强制同步: /data/instances/_template/"
+# 模板恢复: 存储优先，仅首次启动从镜像落种子
+if [ ! -d "/data/instances/_template" ]; then
+    if [ -d "/app/instances/_template" ]; then
+        mkdir -p "/data/instances"
+        cp -r /app/instances/_template /data/instances/_template
+        echo "🌱 [Template] 首次启动，从镜像落种子: /data/instances/_template/"
+    else
+        echo "⚠️ [Template] 镜像内无种子 (/app/instances/_template) — agent 将跳过"
+    fi
 else
-    echo "⚠️ [Template] 镜像内无备份 (/app/template) — agent 将跳过"
+    echo "✅ [Template] 存储罐已有模板，跳过镜像覆盖"
 fi
 
 # ---------------------------------------------------------
@@ -132,6 +132,16 @@ launch_agent() {
     local log_dir="/data/instances/$name/workspace/logs"
     mkdir -p "$workspace" "$log_dir"
 
+    # 注入军团知识 (仅首次/空工作区，尊重存储罐已有内容)
+    if [ "$name" = "neo" ] && [ -d "/app/instances/neo-workspace" ]; then
+        if [ ! -f "$workspace/AGENTS.md" ]; then
+            cp -r /app/instances/neo-workspace/* "$workspace/"
+            echo "🧠 [$name] 军团知识已注入 (首次)"
+        else
+            echo "🧠 [$name] 工作区已存在，跳过注入"
+        fi
+    fi
+
     if [ -f "$config" ]; then
         echo "🚀 [$name] 启动中 (Port: $port)..."
         # 这里的 Agent 进程将 100% 继承上面 export 的所有变量
@@ -165,7 +175,19 @@ done
 
 # 5. 启动 Gatekeeper (监控中枢)
 echo "🛡️ 启动 Gatekeeper 调度服务..."
-sleep 8 
+sleep 8
+
+# 5.5. Staging 保活守护进程 (防止 HF 免费空间休眠)
+# 从持久化 workspace 加载（不依赖 Dockerfile COPY，避免构建失败）
+KSA_SCRIPT="/data/instances/neo/workspace/deploy/huggingface/scripts/keep_staging_alive.py"
+if [ -f "$KSA_SCRIPT" ]; then
+    echo "🔗 [KeepAlive] 启动 Staging 保活服务..."
+    mkdir -p /data/instances/logs
+    nohup python3 "$KSA_SCRIPT" > /data/instances/logs/keep_staging_alive.log 2>&1 &
+    echo "   ✅ keep_staging_alive PID=$!"
+else
+    echo "⚠️ [KeepAlive] $KSA_SCRIPT 不存在，跳过"
+fi
 
 mkdir -p /data/instances/logs
 stdbuf -oL python3 -u gatekeeper.py 2>&1 \

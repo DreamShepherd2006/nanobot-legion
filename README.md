@@ -2,9 +2,9 @@
 
 将单智能体 [NanoBot](https://github.com/HKUDS/nanobot) 扩展为多智能体协同指挥系统的部署层，运行于 Hugging Face Spaces。
 
-**在线演示**：[军团指挥中心](https://huggingface.co/spaces/DreamShepherd2006/nanobot-multi-agent-nightly)（生产）· [Staging](https://huggingface.co/spaces/DreamShepherd2006/Nanobot-Staging)（验证）
+**在线演示**：[军团指挥中心](https://huggingface.co/spaces/DreamShepherd2006/nanobot-multi-agent-nightly)（生产）· [HF Staging](https://huggingface.co/spaces/DreamShepherd2006/Nanobot-Staging)（验证）· [ModelScope Staging](https://www.modelscope.cn/studios/Stone2006/nanobot-multi-agent-nightly)（国内镜像）
 
-> 🏗️ 基于 [NanoBot v0.1.5.post3](https://github.com/HKUDS/nanobot/releases/tag/v0.1.5.post3) (commit [`0b1631f3`](https://github.com/HKUDS/nanobot/commit/0b1631f3))
+> 🏗️ 基于 [NanoBot v0.2.0](https://github.com/HKUDS/nanobot) (commit [`92f2ff3a`](https://github.com/HKUDS/nanobot/commit/92f2ff3a))
 
 > *"军团" — 一组各司其职的 AI 智能体，在统一指挥下协同作战。*
 
@@ -13,7 +13,7 @@
 | 🎖️ | **多智能体协同** — 5 个专业智能体（Neo/Trinity/Sentinel/Assistant/Medic）通过 WebSocket 互联互通。指挥官可跨节点调度任务、查询状态、汇总结果。 |
 |-----|-----|
 | 🤖 | **自主运维** — Neo（军团指挥官）可自主完成上游版本适配验证：拉取最新代码 → 部署到 Staging → 检查构建/运行日志 → 验证通过后上报，无需人工介入。 |
-| 🔄 | **自愈机制** — `resurrect_neo.sh` + Gatekeeper v6.0 健康监控：Neo 离线超过 60 秒自动复活（保守阈值防止 DeepSeek 长时间思考误触发），冷却 300 秒。 |
+| 🔄 | **自愈机制** — Gatekeeper v6.0 健康监控：Neo 离线超过 150 秒自动复活（GRACE_SECONDS 防止 DeepSeek 长时间思考误触发），冷却 300 秒。 |
 | 🛡️ | **OAuth + RBAC** — 基于 Hugging Face OAuth 的三级权限：Commander（管理员）、Member（成员，可对话）、Guest（访客，只读）。 |
 | 🎨 | **动态 WebUI** — 实时智能体状态徽标（待命/执行中/阻塞/离线）、动态侧边栏编制、跨节点标签切换。全部由运行时环境变量驱动，零硬编码。 |
 | 🧪 | **双空间 CI/CD** — Staging 先验证最新上游 nightly，确认通过后再 cherry-pick 到生产 Nightly，避免直接同步风险。 |
@@ -45,33 +45,30 @@
 
 | 文件 | 功能 |
 |------|------|
-| `gatekeeper.py` | OAuth 网关，三级权限控制，HTTP/WS 代理，跨智能体中继 |
+| `gatekeeper.py` | OAuth 网关（HF + ModelScope），三级权限控制，HTTP/WS 代理，跨智能体中继 |
 | `squad_bridge.py` | 智能体之间 WebSocket 消息通信网 |
-| `squad_config_sync.py` | 实例配置动态同步。**新 agent 从模板创建**，已有 agent 仅同步动态端口与白名单（不触碰 provider/model/ssrf）。**修改前自动备份**（`config.json.backup.{timestamp}`），保留最近 5 份。 |
-| `Dockerfile` | 多阶段构建，合并上游 nanobot + 军团部署层 |
-| `entrypoint.sh` | 运行时初始化，实例模板下发 |
+| `squad_config_sync.py` | 实例配置动态同步。新 agent 从模板创建，已有 agent 仅同步动态端口与白名单。修改前自动备份，保留最近 3 份。 |
+| `Dockerfile` | 多阶段构建（13 步骤），合并上游 nanobot + 军团部署层 |
+| `entrypoint.sh` | 运行时初始化：实例模板下发（存储优先，首次启动兜底）、Neo workspace 注入、保活服务 |
 
 ### 补丁
 
 | 补丁 | 目标 | 作用 |
 |------|------|------|
-| `patch_legion_v6_sidebar.py` | `webui/src/components/Sidebar.tsx` | v0.2.0 适配 — 注入 LegionRoster 部件（动态编制 + 状态徽标） |
-| `patch_legion_v4_client.py` | `webui/src/NanobotClient.tsx` | v0.2.0 适配 — 注入 onAnyEvent 拦截器（军团事件路由） |
-| `patch_sidebar_ui_v6.py` | `webui/src/` | 旧版 Sidebar 补丁（v0.1.x 系列） |
-| `patch_app_logic_v4.py` | `webui/src/` | 旧版 App 逻辑补丁（v0.1.x 系列） |
-| `patch_bootstrap_peers.py` | `nanobot/channels/websocket.py` | WS `peers_update` 事件 — 连接认证后推送节点编制 |
-| `patch_message_hardening.py` | `nanobot/providers/` | DeepSeek 消息内容清洗 |
-| `patch_squad_error_events.py` | `nanobot/channels/websocket.py` | 为 squad bridge 提供结构化错误事件 |
+| `patch_legion_v6_sidebar.py` | `webui/src/components/Sidebar.tsx` | 注入 LegionTerminal + 动态编制 + 状态徽标 |
+| `patch_legion_v4_client.py` | `webui/src/NanobotClient.tsx` | 注入 onAnyEvent 拦截器（legion_update / cluster_log 事件路由） |
+| `patch_message_hardening.py` | `nanobot/providers/openai_compat_provider.py` | DeepSeek 消息内容清洗（(empty) 占位符修复） |
+| `patch_squad_error_events.py` | `nanobot/channels/websocket.py` | 为 squad bridge 提供结构化 error 事件 |
 
 ## 快速开始
 
-本仓库是上游 NanoBot 的 **部署层叠加**。
+本仓库是上游 NanoBot 的 **部署层叠加**。`Dockerfile` 位于根目录，squad 组件位于 `deploy/huggingface/`。
 
 ```bash
 git clone https://github.com/HKUDS/nanobot.git
 cd nanobot
 git clone https://github.com/DreamShepherd2006/nanobot-legion.git deploy/huggingface
-# 构建与部署参见 Dockerfile
+# Dockerfile 在 deploy/huggingface/Dockerfile — 复制到项目根目录或挂载为构建上下文
 ```
 
 ## 许可
@@ -81,4 +78,6 @@ MIT — 继承自[上游](https://github.com/HKUDS/nanobot/blob/nightly/LICENSE)
 ## 相关链接
 
 - 上游项目：[HKUDS/nanobot](https://github.com/HKUDS/nanobot)
-- 上游 PR：[#3854](https://github.com/HKUDS/nanobot/pull/3854)（节点编制，已关闭）· [#3869](https://github.com/HKUDS/nanobot/pull/3869)（消息清洗）· [#3908](https://github.com/HKUDS/nanobot/pull/3908)（WS peers_update 事件）
+- 上游 PR：[#3869](https://github.com/HKUDS/nanobot/pull/3869)（DeepSeek 消息清洗）· [#3908](https://github.com/HKUDS/nanobot/pull/3908)（WS peers_update 事件）
+- 上游 Discussion：[#3925](https://github.com/HKUDS/nanobot/discussions/3925)（单容器多智能体系统）
+- ModelScope 镜像：[Stone2006/nanobot-multi-agent-nightly](https://www.modelscope.cn/studios/Stone2006/nanobot-multi-agent-nightly)

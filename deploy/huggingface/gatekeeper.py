@@ -75,6 +75,39 @@ def refresh_roster():
 refresh_roster()
 
 # ═══════════════════════════════════════════════════════════════
+# NanoBot Version (commit SHA for LegionTerminal display)
+# ═══════════════════════════════════════════════════════════════
+
+def _get_nanobot_version() -> str:
+    """Read nanobot version from installed package + commit SHA."""
+    ver = "unknown"
+    try:
+        from nanobot import __version__
+        ver = __version__
+    except Exception:
+        pass
+    if ver == "unknown":
+        try:
+            import tomllib
+            with open("/app/pyproject.toml", "rb") as f:
+                ver = tomllib.load(f).get("project", {}).get("version", "unknown")
+        except Exception:
+            pass
+    # Append commit SHA
+    commit = ""
+    try:
+        with open("/app/NANOBOT_COMMIT") as f:
+            raw = f.read().strip()
+        if raw and raw != "unknown":
+            commit = raw[:8]
+    except Exception:
+        pass
+    return f"{ver} ({commit})" if commit else ver
+
+NANOBOT_VERSION = _get_nanobot_version()
+log(f"📦 nanobot version: {NANOBOT_VERSION}")
+
+# ═══════════════════════════════════════════════════════════════
 # WebUI Target & Per-agent HTTP Proxy Clients
 # ═══════════════════════════════════════════════════════════════
 
@@ -291,6 +324,7 @@ RESURRECT_THRESHOLD = 60       # seconds of continuous offline before trigger
 RESURRECT_COOLDOWN = 300       # seconds before retry after failed resurrection
 
 # Startup grace period — allow agents time to boot before monitoring
+# DeepSeek v4-pro init takes ~120s; 150s with buffer
 GRACE_SECONDS = 150
 _gatekeeper_boot_time = time.time()
 _grace_ended = False
@@ -732,6 +766,7 @@ async def ws_proxy(path: str, client_ws: WebSocket):
         await client_ws.send_text(json.dumps({
             "event": event_type, "type": event_type,
             "data": legion_status,
+            "nanobot_version": NANOBOT_VERSION,
             "roster": {
                 a: {"id": info["id"], "name": a,
                     "gateway_port": info.get("gateway_port"),
@@ -793,6 +828,7 @@ async def ws_proxy(path: str, client_ws: WebSocket):
                 await client_ws.send_text(json.dumps({
                     "event": "legion_update", "type": "legion_update",
                     "data": dict(legion_status),
+                    "nanobot_version": NANOBOT_VERSION,
                     "roster": {
                         a: {"id": i["id"], "name": a,
                             "gateway_port": i.get("gateway_port"),
