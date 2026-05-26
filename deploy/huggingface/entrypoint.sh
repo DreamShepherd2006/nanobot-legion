@@ -67,13 +67,17 @@ if [ -d "$MOUNT_PATH" ]; then
 fi
 
 # 模板恢复: 每次启动强制覆盖（确保模板更新生效）
-if [ -d "/app/instances/_template" ]; then
-    mkdir -p "/data/instances"
-    rm -rf /data/instances/_template
-    cp -r /app/instances/_template /data/instances/_template
-    echo "🔄 [Template] 模板已从镜像强制同步: /data/instances/_template/"
+# 模板恢复: 存储优先，仅首次启动从镜像落种子
+if [ ! -d "/data/instances/_template" ]; then
+    if [ -d "/app/instances/_template" ]; then
+        mkdir -p "/data/instances"
+        cp -r /app/instances/_template /data/instances/_template
+        echo "🌱 [Template] 首次启动，从镜像落种子: /data/instances/_template/"
+    else
+        echo "⚠️ [Template] 镜像内无种子 (/app/instances/_template) — agent 将跳过"
+    fi
 else
-    echo "⚠️ [Template] 镜像内无备份 (/app/instances/_template) — agent 将跳过"
+    echo "✅ [Template] 存储罐已有模板，跳过镜像覆盖"
 fi
 
 # ---------------------------------------------------------
@@ -111,9 +115,14 @@ launch_agent() {
     mkdir -p "$workspace" "$log_dir"
 
     # 注入军团知识 (neo workspace files)
+    # 注入军团知识 (仅首次/空工作区，尊重存储罐已有内容)
     if [ "$name" = "neo" ] && [ -d "/app/instances/neo-workspace" ]; then
-        cp -r /app/instances/neo-workspace/* "$workspace/"
-        echo "🧠 [$name] 军团知识已注入"
+        if [ ! -f "$workspace/AGENTS.md" ]; then
+            cp -r /app/instances/neo-workspace/* "$workspace/"
+            echo "🧠 [$name] 军团知识已注入 (首次)"
+        else
+            echo "🧠 [$name] 工作区已存在，跳过注入"
+        fi
     fi
 
     if [ -f "$config" ]; then

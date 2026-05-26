@@ -35,8 +35,8 @@ RUN echo "💉 [Legion] kernel protocol patches..." && \
     echo "✅ kernel patches done"
 
 # ── 5. Legion: WebUI patches (BEFORE full install — npm build) ──
-COPY patch_legion_v4_client.py /tmp/
-COPY patch_legion_v6_sidebar.py /tmp/
+COPY deploy/huggingface/patch_legion_v4_client.py /tmp/
+COPY deploy/huggingface/patch_legion_v6_sidebar.py /tmp/
 RUN python3 /tmp/patch_legion_v4_client.py && \
     python3 /tmp/patch_legion_v6_sidebar.py && \
     echo "✅ legion webui patches applied"
@@ -45,44 +45,45 @@ RUN python3 /tmp/patch_legion_v4_client.py && \
 RUN uv pip install --system --no-cache .
 
 # ── 7. Legion: Python runtime patches (AFTER full install — site-packages now populated) ──
-COPY patch_message_hardening.py /tmp/
-COPY patch_squad_error_events.py /tmp/
+COPY deploy/huggingface/patch_message_hardening.py /tmp/
+COPY deploy/huggingface/patch_squad_error_events.py /tmp/
 RUN python3 /tmp/patch_message_hardening.py && \
     python3 /tmp/patch_squad_error_events.py && \
     echo "✅ runtime patches applied"
 
-# ── 8. Build WhatsApp bridge ────────────────────────────────
+# ── 8. Build WhatsApp bridge + version stamp ─────────────────
 WORKDIR /app/bridge
 RUN git config --global --add url."https://github.com/".insteadOf ssh://git@github.com/ && \
     git config --global --add url."https://github.com/".insteadOf git@github.com: && \
     npm install && npm run build
 WORKDIR /app
-
-# ── 8.5  Legion: nanobot upstream commit SHA (for version display) ──
-COPY NANOBOT_COMMIT /app/NANOBOT_COMMIT
+COPY deploy/huggingface/NANOBOT_COMMIT /app/NANOBOT_COMMIT
 
 # ── 9. Legion: extra Python dependencies ────────────────────
 RUN uv pip install --system --no-cache \
     fastapi uvicorn websockets authlib httpx itsdangerous tomli \
     huggingface_hub joserfc websocket-client
 
-# ── 10. Legion: instance templates ──────────────────────────
-COPY instances/ /app/instances/
+# ── 10. Legion: minimal instance seed (storage罐优先，此仅首次兜底) ─
+RUN mkdir -p /app/instances/_template /app/instances/neo-workspace/memory && \
+    echo '{"gateway":{"host":"0.0.0.0","port":0},"channels":{"websocket":{"port":0}},"tools":{"exec":{"allowed_env_keys":["NANOBOT_TOKEN","NANOBOT_PEER_*","SQUAD_*","COMMANDER_WHITELIST","USER_AGENT_MAP"]}}}' > /app/instances/_template/config.json && \
+    printf '📍 当前空间: Staging (Nanobot-Staging)\n→ 部署路径: deploy/huggingface/ | /data: 持久化\n' > /app/instances/neo-workspace/AGENTS.md && \
+    echo "✅ minimal seed created (_template + neo-workspace)"
 
 # ── 11. Legion: core scripts ───────────────────────────────
-COPY gatekeeper.py ./gatekeeper.py
-COPY squad_bridge.py ./squad_bridge.py
-COPY squad_config_sync.py ./squad_config_sync.py
-COPY push_tasks.py ./push_tasks.py
+COPY deploy/huggingface/gatekeeper.py ./gatekeeper.py
+COPY deploy/huggingface/squad_bridge.py ./squad_bridge.py
+COPY deploy/huggingface/squad_config_sync.py ./squad_config_sync.py
+COPY deploy/huggingface/push_tasks.py ./push_tasks.py
 
-# ── 11. User & permissions ─────────────────────────────────
+# ── 12. User & permissions ─────────────────────────────────
 RUN useradd -m -u 1000 -s /bin/bash nanobot && \
     mkdir -p /home/nanobot/.nanobot && \
     chmod +x /app/gatekeeper.py /app/squad_bridge.py /app/squad_config_sync.py /app/push_tasks.py && \
     chown -R nanobot:nanobot /home/nanobot /app
 
-# ── 12. Entrypoint ──────────────────────────────────────────
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+# ── 13. Entrypoint ──────────────────────────────────────────
+COPY deploy/huggingface/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/entrypoint.sh
 
 USER nanobot

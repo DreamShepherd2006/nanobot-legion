@@ -2,7 +2,7 @@
 
 将单智能体 [NanoBot](https://github.com/HKUDS/nanobot) 扩展为多智能体协同指挥系统的部署层，运行于 Hugging Face Spaces。
 
-**在线演示**：[军团指挥中心](https://huggingface.co/spaces/DreamShepherd2006/nanobot-multi-agent-nightly)（生产）· [Staging](https://huggingface.co/spaces/DreamShepherd2006/Nanobot-Staging)（验证）
+**在线演示**：[军团指挥中心](https://huggingface.co/spaces/DreamShepherd2006/nanobot-multi-agent-nightly)（生产）· [HF Staging](https://huggingface.co/spaces/DreamShepherd2006/Nanobot-Staging)（验证）· [ModelScope Staging](https://www.modelscope.cn/studios/Stone2006/nanobot-multi-agent-nightly)（国内镜像）
 
 > 🧪 跟踪 [NanoBot v0.2.0](https://github.com/HKUDS/nanobot/releases/tag/v0.2.0)（upstream/nightly [`92f2ff3a`](https://github.com/HKUDS/nanobot/commit/92f2ff3a)）
 
@@ -64,22 +64,15 @@
 
 > ⚠️ `patch_bootstrap_peers.py` 已移除（上游 v0.2.0 已原生支持 `_read_peers`，该补丁无消费者，属于死代码）。
 
-**旧版补丁（v0.1.x 系列，v0.2.0 中不可用）：**
-
-| 补丁 | 目标 | 作用 |
-|------|------|------|
-| `patch_sidebar_ui_v6.py` | `webui/src/` | 旧版 Sidebar 注入（v0.1.x 锚点，v0.2.0 重构后失效） |
-| `patch_app_logic_v4.py` | `webui/src/` | 旧版 App 逻辑补丁（同上） |
-
 ## 快速开始
 
-本仓库是上游 NanoBot 的 **部署层叠加**。
+本仓库是上游 NanoBot 的 **部署层叠加**。`Dockerfile` 位于根目录，squad 组件位于 `deploy/huggingface/`。
 
 ```bash
 git clone https://github.com/HKUDS/nanobot.git
 cd nanobot
 git clone https://github.com/DreamShepherd2006/nanobot-legion.git deploy/huggingface
-# 构建与部署参见 Dockerfile
+# Dockerfile 在 deploy/huggingface/Dockerfile — 复制到项目根目录或挂载为构建上下文
 ```
 
 ## 许可
@@ -89,7 +82,8 @@ MIT — 继承自[上游](https://github.com/HKUDS/nanobot/blob/nightly/LICENSE)
 ## 相关链接
 
 - 上游项目：[HKUDS/nanobot](https://github.com/HKUDS/nanobot)
-- 上游 PR：[#3854](https://github.com/HKUDS/nanobot/pull/3854)（节点编制，已关闭）· [#3869](https://github.com/HKUDS/nanobot/pull/3869)（消息清洗）· [#3908](https://github.com/HKUDS/nanobot/pull/3908)（WS peers_update 事件）
+- 上游 PR：[#3869](https://github.com/HKUDS/nanobot/pull/3869)（DeepSeek 消息清洗）· [#3908](https://github.com/HKUDS/nanobot/pull/3908)（WS peers_update 事件）
+- 上游 Discussion：[#3925](https://github.com/HKUDS/nanobot/discussions/3925)（单容器多智能体系统）
 - ModelScope 验证空间：[Stone2006/nanobot-multi-agent-nightly](https://www.modelscope.cn/studios/Stone2006/nanobot-multi-agent-nightly)
 
 ## 最近更新
