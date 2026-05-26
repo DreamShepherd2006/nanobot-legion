@@ -9,6 +9,7 @@ import datetime
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import asyncio
@@ -290,7 +291,7 @@ RESURRECT_THRESHOLD = 60       # seconds of continuous offline before trigger
 RESURRECT_COOLDOWN = 300       # seconds before retry after failed resurrection
 
 # Startup grace period — allow agents time to boot before monitoring
-GRACE_SECONDS = 60
+GRACE_SECONDS = 150
 _gatekeeper_boot_time = time.time()
 _grace_ended = False
 _grace_until = _gatekeeper_boot_time + GRACE_SECONDS
