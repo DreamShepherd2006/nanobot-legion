@@ -14,30 +14,62 @@
 |-----|-----|
 | 🤖 | **自主运维** — Neo（军团指挥官）可自主完成上游版本适配验证：拉取最新代码 → 部署到 Staging → 检查构建/运行日志 → 验证通过后上报，无需人工介入。 |
 | 🔄 | **自愈机制** — `resurrect_neo.sh` + Gatekeeper v6.0 健康监控：Neo 离线超过 150 秒自动复活（保守阈值防止 DeepSeek 长时间思考误触发），冷却 300 秒。 |
-| 🛡️ | **OAuth + RBAC** — 基于 Hugging Face OAuth 的三级权限：Commander（管理员）、Member（成员，可对话）、Guest（访客，只读）。 |
+| 🛡️ | **OAuth + RBAC** — Hugging Face / ModelScope OAuth，三级权限：Commander（管理员）、Member（成员，可对话）、Guest（访客，只读）。 |
 | 🎨 | **动态 WebUI** — 实时智能体状态徽标（待命/执行中/阻塞/离线）、动态侧边栏编制、跨节点标签切换。全部由运行时环境变量驱动，零硬编码。 |
-| 🧪 | **双空间 CI/CD** — Staging 先验证最新上游 nightly，确认通过后再 cherry-pick 到生产 Nightly，避免直接同步风险。 |
+| 🧪 | **多平台 CI/CD** — 双分支模型（`main` 稳定生产，`staging` 验证前沿），配置分离支持多平台（HF Staging / ModelScope Staging），新平台只需 +1 个 JSON 配置文件。 |
 | 🐳 | **单 Dockerfile 部署** — 运行于 Hugging Face Spaces 免费套餐。多阶段构建：上游 nanobot + 军团补丁在构建时合并打入。 |
+
+## 分支模型
+
+| 分支 | 定位 | 平台 | 节奏 |
+|------|------|------|------|
+| `main` | 🛡️ 稳定生产（Nightly） | HF Space | 落后 staging，cherry-pick 已验证的变更 |
+| `staging` | 🧪 验证前沿 | HF Staging + MS Staging + 未来平台 | 跟踪上游 nightly，日常迭代 |
+
+> 配置分离：同一 `staging` 分支承载多个平台，通过 `squad_config.{platform}.json` 区分，`entrypoint.sh` 启动时自动选配。
+
+### 多平台配置
+
+```
+deploy/huggingface/
+├── squad_config.json                  ← 兜底
+├── squad_config.hf-staging.json       ← HF Staging: /data, hf-staging
+├── squad_config.ms-staging.json       ← MS Staging: /mnt/workspace, modelscope
+└── squad_config.{new-platform}.json   ← 扩展新平台只需创建此文件
+```
+
+| 平台 | 检测条件 | 配置 | 部署目标 |
+|------|---------|------|---------|
+| HF Staging | `SPACE_ID` 含 `NanobotStaging` | `squad_config.hf-staging.json` | `DreamShepherd2006/Nanobot-Staging` |
+| ModelScope | `MODELSCOPE_ENVIRONMENT=studio` | `squad_config.ms-staging.json` | `Stone2006/nanobot-multi-agent-nightly` |
+| HF Nightly (main 分支) | `SPACE_ID` 含 `multi-agent-nightly` | `squad_config.json` | `DreamShepherd2006/nanobot-multi-agent-nightly` |
+
+> 共享代码（gatekeeper / squad_bridge / platforms / 补丁）在 `staging` 上开发，稳定后 cherry-pick 到 `main`。平台差异仅存在于 `squad_config.{platform}.json`。
 
 ## 架构
 
 ```
-                     ┌───────────────────────────────────────┐
-                     │       Hugging Face Space (Nightly)    │
-                     │                                       │
-                     │  Gatekeeper (FastAPI/WS 代理)         │
-                     │   ├─ OAuth / 权限控制                 │
-                     │   ├─ HTTP Relay (跨智能体中继)        │
-  浏览器 ──── WebUI ─▶│   └─ WebSocket 代理                  │
-                     │        │        │        │            │
-                     │     Neo(A)  Trinity  Sentinel  ...    │
-                     │   ┌──────────────────────────────┐    │
-                     │   │  squad_bridge (WS 通信网)    │    │
-                     │   │  squad_config_sync (配置)    │    │
-                     │   └──────────────────────────────┘    │
-                     │                                       │
-                     │   Neo ──▶ Staging 验证空间 ──▶ 上报   │
-                     └───────────────────────────────────────┘
+                      ┌───────────────────────────────────────┐
+                      │       Nightly (HF Space 生产)         │
+                      │                                       │
+                      │  Gatekeeper (FastAPI/WS 代理)         │
+                      │   ├─ OAuth / 权限控制                 │
+                      │   ├─ HTTP Relay (跨智能体中继)        │
+   浏览器 ──── WebUI ─▶│   └─ WebSocket 代理                  │
+                      │        │        │        │            │
+                      │     Neo(A)  Trinity  Sentinel  ...    │
+                      │   ┌──────────────────────────────┐    │
+                      │   │  squad_bridge (WS 通信网)    │    │
+                      │   │  squad_config_sync (配置)    │    │
+                      │   └──────────────────────────────┘    │
+                      │                                       │
+                      │  Neo ──▶ HF Staging ──▶ MS Staging    │
+                      │          (多平台编排验证)              │
+                      └───────────────────────────────────────┘
+
+             nanobot-legion (部署仓库)
+             ├── main     → Nightly 稳定生产
+             └── staging  → 多平台验证 (HF + MS + …)
 ```
 > Neo 作为军团指挥官，可自主拉取上游最新代码 → 部署到 Staging 空间 → 检查构建/运行日志 → 验证通过后报告，实现一线式版本适配验证。
 
@@ -48,8 +80,12 @@
 | `gatekeeper.py` | OAuth 网关（HF + ModelScope），三级权限控制（大小写精确匹配），HTTP/WS 代理，跨智能体中继，保活守护 |
 | `squad_bridge.py` | 智能体之间 WebSocket 消息通信网 |
 | `squad_config_sync.py` | 实例配置动态同步。**新 agent 从模板创建**，已有 agent 仅同步动态端口与白名单（不触碰 provider/model/ssrf）。**修改前自动备份**（`config.json.backup.{timestamp}`），保留最近 3 份。 |
+| `squad_config.json` | 兜底配置（当前 = Nightly）；平台专属 → `squad_config.{platform}.json` |
+| `squad_config_loader.py` | 配置加载器：从 `squad_config.json` 读取并注入 `DEPLOY_PLATFORM` 等环境变量 |
+| `platform_setup.py` | 平台探测入口：导入 `platforms/` → 调用对应 `setup()` → 输出 shell exports |
+| `platforms/` | 平台抽象层：`base.py`（Protocol）、`hf_staging.py`、`hf_direct.py`、`modelscope.py` |
 | `Dockerfile` | 多阶段构建，合并上游 nanobot + 军团部署层 + 补丁打入 |
-| `entrypoint.sh` | 运行时初始化：实例模板下发 + neo workspace 知识注入 + 运行时补丁注入 |
+| `entrypoint.sh` | 运行时初始化：平台检测 → 自动选配 → 实例模板下发 → neo workspace 知识注入 → 补丁注入 |
 
 ### 补丁
 
@@ -87,6 +123,13 @@ MIT — 继承自[上游](https://github.com/HKUDS/nanobot/blob/nightly/LICENSE)
 - ModelScope 验证空间：[Stone2006/nanobot-multi-agent-nightly](https://www.modelscope.cn/studios/Stone2006/nanobot-multi-agent-nightly)
 
 ## 最近更新
+
+`80d2329` — 2026-05-29
+
+- 🏗️ 双分支 + 配置分离：`staging` 分支承载 HF Staging / MS Staging 双平台，通过 `squad_config.{platform}.json` 区分
+- 📋 entrypoint 启动时自动检测平台 → 选配正确的 `squad_config.json`
+- 📦 platforms/ 抽象层 + squad_config_loader 补全至 Dockerfile
+- 🧹 同步 MS 与 HF Staging 部署代码（manual OAuth, stderr logging）
 
 `0f449cc` — 2026-05-26
 
