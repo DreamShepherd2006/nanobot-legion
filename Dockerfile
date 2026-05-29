@@ -76,6 +76,7 @@ COPY deploy/huggingface/squad_bridge.py ./squad_bridge.py
 COPY deploy/huggingface/squad_config_sync.py ./squad_config_sync.py
 COPY deploy/huggingface/squad_config.json ./squad_config.json
 COPY deploy/huggingface/squad_config.hf-staging.json ./squad_config.hf-staging.json
+COPY deploy/huggingface/squad_config.hf-nightly.json ./squad_config.hf-nightly.json
 COPY deploy/huggingface/squad_config.ms-staging.json ./squad_config.ms-staging.json
 COPY deploy/huggingface/squad_config_loader.py ./squad_config_loader.py
 COPY deploy/huggingface/push_tasks.py ./push_tasks.py
