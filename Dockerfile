@@ -83,11 +83,12 @@ COPY deploy/huggingface/push_tasks.py ./push_tasks.py
 COPY deploy/huggingface/platform_setup.py ./platform_setup.py
 COPY deploy/huggingface/platforms/ ./platforms/
 COPY deploy/huggingface/patch_gatekeeper_identity.py ./patch_gatekeeper_identity.py
+COPY deploy/huggingface/scripts/resurrect_neo.sh /app/scripts/resurrect_neo.sh
 
 # ── 12. User & permissions ─────────────────────────────────
 RUN useradd -m -u 1000 -s /bin/bash nanobot && \
     mkdir -p /home/nanobot/.nanobot && \
-    chmod +x /app/gatekeeper.py /app/squad_bridge.py /app/squad_config_sync.py /app/push_tasks.py /app/platform_setup.py && \
+    chmod +x /app/gatekeeper.py /app/squad_bridge.py /app/squad_config_sync.py /app/push_tasks.py /app/platform_setup.py /app/scripts/resurrect_neo.sh && \
     chown -R nanobot:nanobot /home/nanobot /app
 
 # ── 13. Entrypoint ──────────────────────────────────────────
