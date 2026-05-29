@@ -19,10 +19,15 @@ from typing import Optional
 import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
-from authlib.integrations.starlette_client import OAuth
 import websockets
+
+# ── Platform (auto-detected) ──
+# IMPORTANT: squad_config_loader must be imported BEFORE platforms!
+# It injects DEPLOY_PLATFORM into os.environ at module level, which
+# platforms.__init__._detect() reads in its matches() step 0.
+from squad_config_loader import get_relay_timeout  # noqa: E402
+from platforms import platform  # noqa: E402
 
 # ═══════════════════════════════════════════════════════════════
 # Logging
@@ -64,12 +69,18 @@ def refresh_roster():
                     "gateway_port": info.get("gateway_port", 0),
                     "ws_port": info.get("ws_port", 0),
                 }
-                INSTANCE_WORKSPACES[agent_name] = f"/data/instances/{agent_name}"
+                INSTANCE_WORKSPACES[agent_name] = platform.instance_path(agent_name)
         except (json.JSONDecodeError, TypeError):
             log(f"⚠️ 跳过无效 NANOBOT_PEER_*: {key}")
 
     AGENT_NAMES.sort()
     log(f"📋 编制加载: {len(AGENT_NAMES)} agents → {AGENT_NAMES}")
+
+    # Keep platform in sync with current roster
+    try:
+        platform.refresh_config(webui_agent=WEBUI_AGENT, squad_roster=SQUAD_ROSTER)
+    except Exception:
+        pass
 
 refresh_roster()
 
@@ -113,23 +124,8 @@ NANOBOT_VERSION = _get_nanobot_version()
 log(f"📦 nanobot version: {NANOBOT_VERSION}")
 
 def get_agent_for_user(username: str) -> str:
-    """返回该 HF 用户对应的 agent name；未匹配或 Commander → WEBUI_AGENT"""
-    if not username or username == "Unknown":
-        return WEBUI_AGENT
-    whitelist = [n.strip() for n in os.environ.get("COMMANDER_WHITELIST", "").split(",") if n.strip()]
-    if username in whitelist:
-        return WEBUI_AGENT
-    # USER_AGENT_MAP flat format: {"username": "NANOBOT_PEER_neo"}
-    try:
-        user_map = json.loads(os.environ.get("USER_AGENT_MAP", "{}"))
-    except json.JSONDecodeError:
-        user_map = {}
-    peer_key = user_map.get(username, "")
-    if peer_key and peer_key.startswith("NANOBOT_PEER_"):
-        agent_name = peer_key[len("NANOBOT_PEER_"):].lower()
-        if agent_name in SQUAD_ROSTER:
-            return agent_name
-    return WEBUI_AGENT
+    """返回该用户对应的 agent name → 委托给 platform 模块."""
+    return platform.get_agent_for_user(username)
 
 # Per-agent HTTP clients for dynamic user → agent HTTP proxying
 _http_clients = {}
@@ -263,48 +259,16 @@ async def _observer_capture(
 
 
 # ═══════════════════════════════════════════════════════════════
-# OAuth (Hugging Face)
+# OAuth — delegated to platform module
 # ═══════════════════════════════════════════════════════════════
 
-from starlette.config import Config as StarletteConfig
-
-starlette_config = StarletteConfig(environ=os.environ)
-oauth = OAuth(starlette_config)
-_oauth_cid = os.environ.get("OAUTH_CLIENT_ID", "MISSING")
-log(f"🔑 OAuth CLIENT_ID prefix: {_oauth_cid[:4]}... (len={len(_oauth_cid)})")
-oauth.register(
-    name="huggingface",
-    client_id=_oauth_cid,
-    client_secret=os.environ.get("OAUTH_CLIENT_SECRET"),
-    server_metadata_url="https://huggingface.co/.well-known/openid-configuration",
-    client_kwargs={"scope": "openid profile"},
-)
+oauth = platform.register_oauth()
 
 # ═══════════════════════════════════════════════════════════════
-# Auth helpers
+# Auth helpers — delegated to platform module
 # ═══════════════════════════════════════════════════════════════
 
-def check_commander_privilege(session_user):
-    if not session_user: return False
-    whitelist = [n.strip() for n in os.environ.get("COMMANDER_WHITELIST", "").split(",") if n.strip()]
-    current_username = "Unknown"
-    if isinstance(session_user, dict):
-        current_username = session_user.get("preferred_username") or session_user.get("username") or session_user.get("name") or "Unknown"
-    elif isinstance(session_user, str):
-        current_username = session_user
-    return current_username in whitelist
-
-class ForceAuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        public_paths = ["/login", "/auth", "/health", "/logout", "/webui/bootstrap"]
-        if path.startswith("/api/squad"):
-            return await call_next(request)
-        is_public = any(path == p for p in public_paths) or path.startswith("/assets") or path.startswith("/brand")
-        if not is_public and not request.session.get("user"):
-            login_url = str(request.url_for("login")).replace("http://", "https://")
-            return RedirectResponse(url=login_url)
-        return await call_next(request)
+# ForceAuthMiddleware is now provided by platform.create_auth_middleware()
 
 # ═══════════════════════════════════════════════════════════════
 # Legion Monitor (agent alive/dead tracking)
@@ -359,7 +323,7 @@ async def log_bridge():
     await asyncio.sleep(GRACE_SECONDS)
     while True:
         for name in AGENT_NAMES:
-            path = f"/data/instances/{name}/logs/gateway.log"
+            path = f"{platform.instance_path(name)}/logs/gateway.log"
             try:
                 with open(path) as f:
                     f.seek(0, 2)
@@ -371,7 +335,7 @@ async def log_bridge():
 # Dead Letter Queue (DLQ) Replay
 # ═══════════════════════════════════════════════════════════════
 
-DLQ_DIR = os.environ.get("DLQ_DIR", "/data/dlq")
+DLQ_DIR = os.environ.get("DLQ_DIR", f"{platform.data_root}/dlq")
 os.makedirs(DLQ_DIR, exist_ok=True)
 
 async def dlq_replay():
@@ -407,52 +371,27 @@ async def dlq_replay():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log(f"🛡️ Gatekeeper v5.0 (DLQ Replay) online — {len(AGENT_NAMES)} agents.")
+    log(f"🛡️ Gatekeeper v6.0 (platform: {platform.name}) online — {len(AGENT_NAMES)} agents.")
+    await platform.startup()
     asyncio.create_task(legion_monitor())
     asyncio.create_task(log_bridge())
     asyncio.create_task(dlq_replay())
     yield
 
 app = FastAPI(lifespan=lifespan)
-app.add_middleware(ForceAuthMiddleware)
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=os.environ.get("SESSION_SECRET", "nanobot_commander_secret_123"),
-    https_only=True,
-    same_site="none"
-)
+app.add_middleware(platform.create_auth_middleware())
+app.add_middleware(SessionMiddleware, **platform.session_kwargs)
+
+# ── Platform-specific routes ──
+platform.register_routes(app)
+
+# ── Refresh platform with current config ──
+platform.refresh_config(webui_agent=WEBUI_AGENT, squad_roster=SQUAD_ROSTER)
 
 @app.middleware("http")
 async def force_https_middleware(request: Request, call_next):
     request.scope["scheme"] = "https"
     return await call_next(request)
-
-# ═══════════════════════════════════════════════════════════════
-# OAuth Routes
-# ═══════════════════════════════════════════════════════════════
-
-@app.get("/login")
-async def login(request: Request):
-    request.session.clear()
-    redirect_uri = str(request.url_for('auth')).replace("http://", "https://")
-    return await oauth.huggingface.authorize_redirect(request, redirect_uri)
-
-@app.get("/auth")
-async def auth(request: Request):
-    try:
-        token = await oauth.huggingface.authorize_access_token(request)
-        user_info = token.get('userinfo')
-        if user_info:
-            request.session['user'] = dict(user_info)
-            return RedirectResponse(url="/")
-    except Exception:
-        pass
-    return RedirectResponse(url="/login")
-
-@app.get("/logout")
-async def logout(request: Request):
-    request.session.clear()
-    return RedirectResponse(url="/")
 
 @app.get("/health")
 async def health():
@@ -463,7 +402,7 @@ async def health():
 # ═══════════════════════════════════════════════════════════════
 
 RELAY_TOKEN = os.environ.get("SQUAD_RELAY_TOKEN", "").strip()
-RELAY_TIMEOUT = int(os.environ.get("RELAY_TIMEOUT", "60"))
+RELAY_TIMEOUT = get_relay_timeout()
 
 @app.post("/api/squad/relay")
 async def squad_relay(request: Request):
@@ -473,7 +412,7 @@ async def squad_relay(request: Request):
     Body:   {"sender":"neo","target":"trinity","message":"ping","correlation_id":"sq-..."}
 
     Auth-free (no OAuth session required) — secured by shared token.
-    Permission: reuses gatekeeper's COMMANDER_WHITELIST + USER_AGENT_MAP.
+    Permission: delegated to platform.check_relay_permission().
     """
     # ── Auth ──
     auth_header = request.headers.get("X-Squad-Token", "")
@@ -505,41 +444,13 @@ async def squad_relay(request: Request):
         return JSONResponse(
             {"status": "agent_offline", "error": f"'{target}' is offline", "correlation_id": correlation_id}, status_code=503)
 
-    # ── Permission (same logic as squad_bridge v6.1) ──
-    whitelist = [w.strip().lower() for w in
-                  os.environ.get("COMMANDER_WHITELIST", "").split(",") if w.strip()]
-    user_map: dict = {}
-    try:
-        user_map = json.loads(os.environ.get("USER_AGENT_MAP", "{}"))
-    except json.JSONDecodeError:
-        pass
-
-    # Reverse lookup: agent alias → HF username
-    # USER_AGENT_MAP format: {"username": "NANOBOT_PEER_NEO", ...}  (flat, values are strings)
-    agent_to_user: dict[str, str] = {}
-    for uname, peer_key in user_map.items():
-        if isinstance(peer_key, str) and peer_key.upper().startswith("NANOBOT_PEER_"):
-            agent_name = peer_key[len("NANOBOT_PEER_"):].lower()
-            agent_to_user[agent_name] = uname.lower()
-
-    effective_user = sender.lower()
-    if effective_user in agent_to_user:
-        effective_user = agent_to_user[effective_user]
-
-    is_commander = effective_user in whitelist
-
-    if not is_commander:
-        allowed: list[str] = []
-        if effective_user in user_map:
-            peer_key = user_map[effective_user]
-            if isinstance(peer_key, str) and peer_key.upper().startswith("NANOBOT_PEER_"):
-                allowed.append(peer_key[len("NANOBOT_PEER_"):].lower())
-        if target not in allowed:
-            return JSONResponse({
-                "status": "permission_denied",
-                "error": f"'{sender}' (user:{effective_user}) not authorized for '{target}'",
-                "correlation_id": correlation_id,
-            }, status_code=403)
+    # ── Permission (delegated to platform) ──
+    if not platform.check_relay_permission(sender, target):
+        return JSONResponse({
+            "status": "permission_denied",
+            "error": f"'{sender}' not authorized for '{target}'",
+            "correlation_id": correlation_id,
+        }, status_code=403)
 
     # ── Relay via WebSocket ──
     target_info = SQUAD_ROSTER[target]
@@ -716,11 +627,8 @@ async def ws_proxy(path: str, client_ws: WebSocket):
 
     # ── Session & identity ──────────────────────────────────
     session_user = client_ws.scope.get("session", {}).get("user")
-    whitelist = [n.strip() for n in os.environ.get("COMMANDER_WHITELIST", "").split(",") if n.strip()]
-    real_name = "Guest"
-    if isinstance(session_user, dict):
-        real_name = session_user.get("preferred_username") or session_user.get("username") or session_user.get("name") or "Unknown"
-    is_commander = bool(real_name in whitelist)
+    real_name = platform.extract_username(session_user) if isinstance(session_user, dict) else "Guest"
+    is_commander = platform.is_commander(session_user)
     uname = real_name if is_commander else f"{real_name}_Observer"
 
     # ── Squad roster injection (V4/V6 interceptor expects these) ──
@@ -812,11 +720,21 @@ async def ws_proxy(path: str, client_ws: WebSocket):
     # ── Bidirectional proxy with neo + cluster_log inject ───
     try:
         async def client_to_neo():
-            """Commander → neo (unchanged)."""
+            """Commander → neo (identity injection + guest blocking via platform)."""
+            username = uname.lower().replace("_observer", "")
             try:
                 while True:
                     data = await client_ws.receive_text()
-                    await neo_ws.send(data)
+                    processed, blocked = platform.process_commander_message(
+                        data, username, real_name, is_commander
+                    )
+                    if blocked is not None:
+                        await client_ws.send_text(json.dumps({
+                            "event": "blocked", "type": "blocked",
+                            "text": blocked
+                        }))
+                        continue
+                    await neo_ws.send(processed)
             except (WebSocketDisconnect, Exception):
                 pass
 

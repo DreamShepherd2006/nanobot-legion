@@ -1,39 +1,55 @@
 #!/bin/bash
+set -e
 
-# 1. 基础环境配置
+# ── 1. 基础环境配置 ──────────────────────────────────────────────
 export HOME="/home/nanobot"
 DIR="$HOME/.nanobot"
-MOUNT_PATH="/data" 
 
-# 确保 PYTHONPATH 包含当前应用目录
+# 从 seed config 读取 data_root，然后将配置迁移到持久化目录
+SEED_CONFIG="/app/squad_config.json"
+MOUNT_PATH=$(python3 -c "import json; print(json.load(open('$SEED_CONFIG')).get('data_root', '/data'))")
+echo "📂 [Storage] data_root = $MOUNT_PATH"
+
+# Storage-first: 首次启动时将 seed config 复制到持久化路径
+PERSIST_CONFIG="$MOUNT_PATH/squad_config.json"
+if [ ! -f "$PERSIST_CONFIG" ]; then
+    echo "📋 [Config] 首次启动，种子配置 → 持久化存储 ($PERSIST_CONFIG)"
+    cp "$SEED_CONFIG" "$PERSIST_CONFIG"
+else
+    echo "📋 [Config] 配置已就绪 ($PERSIST_CONFIG)"
+fi
+export SQUAD_CONFIG_PATH="$PERSIST_CONFIG"
+
 export PATH="/home/nanobot/.local/bin:$PATH"
 export PYTHONPATH="/app:${PYTHONPATH}"
 export PYTHONDONTWRITEBYTECODE=1
-export WEBUI_AGENT="neo"  # 军团指挥中心默认前端入口 agent
+export WEBUI_AGENT="neo"
 
-# ---------------------------------------------------------
-# 💡 步骤 A：军团环境变量解冻 (阻塞式执行)
-# ---------------------------------------------------------
-echo "🧬 [System] 正在从系统根进程同步军团环境变量..."
+# ── 2. 平台相关环境准备 (delegates to platforms/<name>.py) ─────────
+echo "🧬 [System] 平台环境初始化..."
+eval "$(python3 /app/platform_setup.py)"
+echo "✅ [System] 平台初始化完成"
 
-# 注意：从 /proc/1/environ 读取才能确保拿到容器启动时注入的原始变量
-while IFS='=' read -r -d '' name value; do
-    if [[ "$name" == NANOBOT_TOKEN ]] || [[ "$name" == NANOBOT_PEER_* ]] || [[ "$name" == SQUAD_LEGION ]]; then
-        export "$name"="$value"
-        echo "   >> 已解冻: $name"
-    fi
-done < /proc/1/environ
-
-# 阻塞校验：确保关键变量已经进入当前 Shell 内存
-if [ -z "$NANOBOT_PEER_NEO" ]; then
-    echo "⚠️ [Warning] 未检测到 NANOBOT_PEER_NEO，请检查环境变量配置"
-else
-    echo "✅ [System] 环境变量同步完成，已进入内存"
+# ── 2a. Peer env fallback (squad_config.json → env, when vars missing) ──
+if [ -z "$NANOBOT_PEER_NEO" ] && [ -f "$SQUAD_CONFIG_PATH" ]; then
+    echo "🔧 [Config] 从 squad_config.json 导出编制环境变量..."
+    python3 -c "
+import json
+cfg = json.load(open('$SQUAD_CONFIG_PATH'))
+for name, info in cfg.get('peers', {}).items():
+    print(f'export NANOBOT_PEER_{name.upper()}=\\'' + json.dumps({
+        'id': info['id'],
+        'gateway_port': info['gateway_port'],
+        'ws_port': info['ws_port']
+    }) + '\\'')
+" > /tmp/peers_env.sh
+    source /tmp/peers_env.sh
+    echo "   ✅ 已从 squad_config.json 导出 $(grep -c 'export' /tmp/peers_env.sh) 个 peer"
+elif [ -n "$NANOBOT_PEER_NEO" ]; then
+    echo "✅ [System] 环境变量已就绪"
 fi
 
-# ---------------------------------------------------------
-# 💡 步骤：构建军团花名册 SQUAD_LEGION（从 NANOBOT_PEER_* 派生）
-# ---------------------------------------------------------
+# ── 3. 构建军团花名册 SQUAD_LEGION ─────────────────────────────────
 echo "🧑‍🤝‍🧑 [Squad] 构建军团花名册 SQUAD_LEGION..."
 if [ -z "$SQUAD_LEGION" ]; then
     export SQUAD_LEGION=$(python3 -c "
@@ -54,44 +70,26 @@ else
     echo "   ℹ️  SQUAD_LEGION 已手动定义，跳过自推导"
 fi
 
-# 2. 存储初始化逻辑
+# ── 4. 存储初始化 ─────────────────────────────────────────────────
 echo "🔍 [Storage] 正在检查持久化存储..."
-# 清理残留文件（防止 NotADirectoryError）
 [ -f "$DIR/instances" ] && rm -f "$DIR/instances"
 [ -f "$MOUNT_PATH/instances" ] && rm -f "$MOUNT_PATH/instances"
 mkdir -p "$DIR"
 if [ -d "$MOUNT_PATH" ]; then
     mkdir -p "$MOUNT_PATH/instances"
     ln -sfn "$MOUNT_PATH/instances" "$DIR/instances"
-    echo "✅ [Storage] 持久化存储已链接"
+    echo "✅ [Storage] 持久化存储已链接 ($MOUNT_PATH/instances → $DIR/instances)"
 fi
 
-# 模板恢复: 每次启动强制覆盖（确保模板更新生效）
-# 模板恢复: 存储优先，仅首次启动从镜像落种子
-if [ ! -d "/data/instances/_template" ]; then
-    if [ -d "/app/instances/_template" ]; then
-        mkdir -p "/data/instances"
-        cp -r /app/instances/_template /data/instances/_template
-        echo "🌱 [Template] 首次启动，从镜像落种子: /data/instances/_template/"
-    else
-        echo "⚠️ [Template] 镜像内无种子 (/app/instances/_template) — agent 将跳过"
-    fi
-else
-    echo "✅ [Template] 存储罐已有模板，跳过镜像覆盖"
-fi
-
-# ---------------------------------------------------------
-# 💡 步骤 B：执行军团配置自动化同步 (确保在 Agent 启动前)
-# ---------------------------------------------------------
-echo "🔧 [System] 正在执行军团授权白名单自动注入..."
+# ── 5. 军团配置同步 ────────────────────────────────────────────────
+echo "🔧 [System] 执行军团配置同步..."
 if [ -f "/app/squad_config_sync.py" ]; then
-    # 这里会读取上面 export 的变量并修补 config.json
     python3 /app/squad_config_sync.py
 else
-    echo "⚠️ [System] 未发现 squad_config_sync.py，跳过配置修补"
+    echo "⚠️ [System] 未发现 squad_config_sync.py，跳过"
 fi
 
-# 3. 日志管道预热（动态派生，无硬编码）
+# ── 6. 日志管道预热 ────────────────────────────────────────────────
 echo "📑 [System] 正在初始化日志通道..."
 for var in $(env | grep '^NANOBOT_PEER_' | cut -d= -f1); do
     name=$(echo "$var" | sed 's/^NANOBOT_PEER_//' | tr '[:upper:]' '[:lower:]')
@@ -99,35 +97,21 @@ for var in $(env | grep '^NANOBOT_PEER_' | cut -d= -f1); do
 done
 echo "[$(date '+%H:%M:%S')] 🚀 gatekeeper 通道初始化完毕" > "$HOME/gatekeeper.log"
 
-# 4. Agent 启动函数
+# ── 7. Agent 启动 ─────────────────────────────────────────────────
 launch_agent() {
     local name=$1
     local port=$2
     local config="$DIR/instances/$name/config.json"
     local workspace="$DIR/instances/$name/workspace"
     local inst_dir="$DIR/instances/$name"
+    local log_dir="$MOUNT_PATH/instances/$name/workspace/logs"
 
-    # 清理残留文件 block（防止 NotADirectoryError）
     [ -f "$inst_dir" ] && rm -f "$inst_dir"
     [ -f "$workspace" ] && rm -f "$workspace"
-
-    local log_dir="/data/instances/$name/workspace/logs"
     mkdir -p "$workspace" "$log_dir"
-
-    # 注入军团知识 (neo workspace files)
-    # 注入军团知识 (仅首次/空工作区，尊重存储罐已有内容)
-    if [ "$name" = "neo" ] && [ -d "/app/instances/neo-workspace" ]; then
-        if [ ! -f "$workspace/AGENTS.md" ]; then
-            cp -r /app/instances/neo-workspace/* "$workspace/"
-            echo "🧠 [$name] 军团知识已注入 (首次)"
-        else
-            echo "🧠 [$name] 工作区已存在，跳过注入"
-        fi
-    fi
 
     if [ -f "$config" ]; then
         echo "🚀 [$name] 启动中 (Port: $port)..."
-        # 这里的 Agent 进程将 100% 继承上面 export 的所有变量
         (
             exec stdbuf -oL nanobot gateway \
                 --config "$config" \
@@ -140,7 +124,6 @@ launch_agent() {
     fi
 }
 
-# --- 动态启动：从 NANOBOT_PEER_* 派生 name，从 config.json 读取 gateway port ---
 for var in $(env | grep '^NANOBOT_PEER_' | cut -d= -f1); do
     name=$(echo "$var" | sed 's/^NANOBOT_PEER_//' | tr '[:upper:]' '[:lower:]')
     config="$DIR/instances/$name/config.json"
@@ -156,13 +139,12 @@ for var in $(env | grep '^NANOBOT_PEER_' | cut -d= -f1); do
     fi
 done
 
-# 5. 启动 Gatekeeper (监控中枢)
+# ── 8. Gatekeeper ──────────────────────────────────────────────────
 echo "🛡️ 启动 Gatekeeper 调度服务..."
-sleep 8 
-
-mkdir -p /data/instances/logs
+sleep 8
+mkdir -p "$MOUNT_PATH/instances/logs"
 stdbuf -oL python3 -u gatekeeper.py 2>&1 \
     | stdbuf -oL sed "s/^/[GATEKEEPER] /" \
-    | tee -a "/data/instances/logs/gatekeeper.log"
+    | tee -a "$MOUNT_PATH/instances/logs/gatekeeper.log"
 
 trap "kill 0" EXIT
