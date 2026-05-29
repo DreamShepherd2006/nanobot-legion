@@ -74,12 +74,19 @@ RUN mkdir -p /app/instances/_template /app/instances/neo-workspace/memory && \
 COPY deploy/huggingface/gatekeeper.py ./gatekeeper.py
 COPY deploy/huggingface/squad_bridge.py ./squad_bridge.py
 COPY deploy/huggingface/squad_config_sync.py ./squad_config_sync.py
+COPY deploy/huggingface/squad_config.json ./squad_config.json
+COPY deploy/huggingface/squad_config.hf-staging.json ./squad_config.hf-staging.json
+COPY deploy/huggingface/squad_config.ms-staging.json ./squad_config.ms-staging.json
+COPY deploy/huggingface/squad_config_loader.py ./squad_config_loader.py
 COPY deploy/huggingface/push_tasks.py ./push_tasks.py
+COPY deploy/huggingface/platform_setup.py ./platform_setup.py
+COPY deploy/huggingface/platforms/ ./platforms/
+COPY deploy/huggingface/patch_gatekeeper_identity.py ./patch_gatekeeper_identity.py
 
 # ── 12. User & permissions ─────────────────────────────────
 RUN useradd -m -u 1000 -s /bin/bash nanobot && \
     mkdir -p /home/nanobot/.nanobot && \
-    chmod +x /app/gatekeeper.py /app/squad_bridge.py /app/squad_config_sync.py /app/push_tasks.py && \
+    chmod +x /app/gatekeeper.py /app/squad_bridge.py /app/squad_config_sync.py /app/push_tasks.py /app/platform_setup.py && \
     chown -R nanobot:nanobot /home/nanobot /app
 
 # ── 13. Entrypoint ──────────────────────────────────────────

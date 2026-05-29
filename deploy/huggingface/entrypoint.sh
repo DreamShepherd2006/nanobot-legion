@@ -1,6 +1,32 @@
 #!/bin/bash
 set -e
 
+# ── 0. 平台检测 → 自动选配 ──────────────────────────────────────
+# 在读取任何 squad_config.json 之前，根据平台环境变量
+# 将正确的平台配置复制为 /app/squad_config.json
+
+_choose_platform_config() {
+    local pf=""
+    # ModelScope: MODELSCOPE_ENVIRONMENT=studio
+    if [ "${MODELSCOPE_ENVIRONMENT:-}" = "studio" ]; then
+        pf="ms-staging"
+    # HF Staging: SPACE_ID 含 "NanobotStaging"
+    elif echo "${SPACE_ID:-}" | grep -qi "nanobotstaging"; then
+        pf="hf-staging"
+    # HF Nightly: SPACE_ID 含 "multi-agent-nightly" 但非 Staging
+    elif echo "${SPACE_ID:-}" | grep -qi "multi-agent-nightly"; then
+        pf="hf-nightly"
+    fi
+
+    if [ -n "$pf" ] && [ -f "/app/squad_config.${pf}.json" ]; then
+        cp "/app/squad_config.${pf}.json" "/app/squad_config.json"
+        echo "📋 [Config] selected → squad_config.${pf}.json"
+    else
+        echo "📋 [Config] using default squad_config.json (platform detection: '${pf:-none}')"
+    fi
+}
+_choose_platform_config
+
 # ── 1. 基础环境配置 ──────────────────────────────────────────────
 export HOME="/home/nanobot"
 DIR="$HOME/.nanobot"
