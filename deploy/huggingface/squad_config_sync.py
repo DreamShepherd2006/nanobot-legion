@@ -127,7 +127,7 @@ def sync_configs():
     从 NANOBOT_PEER_* 创建/同步各 agent 的 config.json。
     - 新 agent：从模板 deepcopy → patch 端口 → 写入（模板只在新 agent 时生效）
     - 已有 agent：仅同步 gateway.port + allowed_env_keys（不触碰模板字段）
-    无返回值 — 结果直接落盘到 /data/instances/{name}/config.json
+    无返回值 — 结果直接落盘到 {INSTANCES_ROOT}/{name}/config.json
     """
     _log("🛡️ Squad Config Sync v4.0 — 军团端口配置中心")
     print()

@@ -400,10 +400,10 @@ def _mark_offline(name: str, reason: str, now: float = None):
 
 def _find_resurrection_script(name: str) -> Optional[str]:
     """Find the resurrection script for an agent, checking both
-    /app/scripts/ (Docker-deployed) and /data/ (persistent volume)."""
+    /app/scripts/ (Docker-deployed) and persistent instance workspace."""
     candidates = [
         f"/app/scripts/resurrect_{name}.sh",
-        f"/data/instances/{name}/workspace/scripts/resurrect_{name}.sh",
+        f"{platform.instance_path(name)}/workspace/scripts/resurrect_{name}.sh",
     ]
     for path in candidates:
         if os.path.exists(path):
