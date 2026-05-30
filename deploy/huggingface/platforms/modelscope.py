@@ -578,10 +578,9 @@ class ModelScopePlatform(PlatformProtocol):
             if _os.path.isdir(item_path) and item not in ("_template", "neo-workspace", ".git") and _os.path.isfile(cfg_file):
                 dst_dir = f"{mount_path}/instances/{item}"
                 dst_cfg = f"{dst_dir}/config.json"
-                if not _os.path.exists(dst_cfg):
-                    _os.makedirs(dst_dir, exist_ok=True)
-                    _shutil.copy2(cfg_file, dst_cfg)
-                    _log(f"🆕 [{item}] config.json restored from dataset")
+                _os.makedirs(dst_dir, exist_ok=True)
+                _shutil.copy2(cfg_file, dst_cfg)
+                _log(f"🔄 [{item}] config.json restored from dataset")
 
         # 6. Seed neo workspace from dataset
         neo_ws = f"{mount_path}/instances/neo/workspace"

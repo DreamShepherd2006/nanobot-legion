@@ -212,7 +212,7 @@ def sync_configs():
             # Fix corrupted configs that may have root-level keys from hotfix mismatches.
             # Known corruption: "exec" at root level — belongs at tools.exec only.
             _bad_keys_removed = []
-            for _bad_key in ["exec"]:
+            for _bad_key in ["exec", "allowed_env_keys"]:
                 if _bad_key in cfg:
                     del cfg[_bad_key]
                     _bad_keys_removed.append(_bad_key)
