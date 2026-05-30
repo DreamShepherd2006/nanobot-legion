@@ -54,14 +54,18 @@ export WEBUI_AGENT="neo"
 
 # ── 2. 军团环境变量解冻（从 /proc/1/environ 兜底读取）───────────
 echo "🧬 [System] 正在从系统根进程同步军团环境变量..."
-while IFS='=' read -r -d '' name value; do
-    if [[ "$name" == NANOBOT_TOKEN ]] || [[ "$name" == NANOBOT_PEER_* ]] || \
-       [[ "$name" == SQUAD_LEGION ]] || [[ "$name" == SPACE_ID ]] || \
-       [[ "$name" == SQUAD_RELAY_TOKEN_* ]]; then
-        export "$name"="$value"
-        echo "   >> 已解冻: $name"
-    fi
-done < /proc/1/environ
+if [ -r /proc/1/environ ]; then
+    while IFS='=' read -r -d '' name value; do
+        if [[ "$name" == NANOBOT_TOKEN ]] || [[ "$name" == NANOBOT_PEER_* ]] || \
+           [[ "$name" == SQUAD_LEGION ]] || [[ "$name" == SPACE_ID ]] || \
+           [[ "$name" == SQUAD_RELAY_TOKEN_* ]]; then
+            export "$name"="$value"
+            echo "   >> 已解冻: $name"
+        fi
+    done < /proc/1/environ
+else
+    echo "   ℹ️  /proc/1/environ 不可读（tini 隔离），依赖 su 继承环境"
+fi
 
 if [ -z "$NANOBOT_PEER_NEO" ]; then
     echo "⚠️ [Warning] 未检测到 NANOBOT_PEER_NEO，请检查环境变量配置"
