@@ -37,8 +37,10 @@ RUN echo "💉 [Legion] kernel protocol patches..." && \
 # ── 5. Legion: WebUI patches (BEFORE full install — npm build) ──
 COPY deploy/huggingface/patch_legion_v4_client.py /tmp/
 COPY deploy/huggingface/patch_legion_v6_sidebar.py /tmp/
+COPY deploy/huggingface/patch_webui_squad_sessions.py /tmp/
 RUN python3 /tmp/patch_legion_v4_client.py && \
     python3 /tmp/patch_legion_v6_sidebar.py && \
+    python3 /tmp/patch_webui_squad_sessions.py && \
     echo "✅ legion webui patches applied"
 
 # ── 6. Full install (triggers hatch_build.py → npm build) ─
@@ -47,8 +49,10 @@ RUN uv pip install --system --no-cache .
 # ── 7. Legion: Python runtime patches (AFTER full install — site-packages now populated) ──
 COPY deploy/huggingface/patch_message_hardening.py /tmp/
 COPY deploy/huggingface/patch_squad_error_events.py /tmp/
+COPY deploy/huggingface/patch_gatekeeper_identity.py /tmp/
 RUN python3 /tmp/patch_message_hardening.py && \
     python3 /tmp/patch_squad_error_events.py && \
+    python3 /tmp/patch_gatekeeper_identity.py && \
     echo "✅ runtime patches applied"
 
 # ── 8. Build WhatsApp bridge + version stamp ─────────────────
@@ -82,7 +86,6 @@ COPY deploy/huggingface/squad_config_loader.py ./squad_config_loader.py
 COPY deploy/huggingface/push_tasks.py ./push_tasks.py
 COPY deploy/huggingface/platform_setup.py ./platform_setup.py
 COPY deploy/huggingface/platforms/ ./platforms/
-COPY deploy/huggingface/patch_gatekeeper_identity.py ./patch_gatekeeper_identity.py
 COPY deploy/huggingface/scripts/resurrect_neo.sh /app/scripts/resurrect_neo.sh
 
 # ── 12. User & permissions ─────────────────────────────────

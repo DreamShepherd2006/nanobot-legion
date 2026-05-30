@@ -20,7 +20,7 @@ from typing import Optional
 
 import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
+from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse, Response
 from starlette.middleware.sessions import SessionMiddleware
 import websockets
 
@@ -699,6 +699,50 @@ async def squad_tasks_get(request: Request):
     if not RELAY_TOKEN or auth_header != RELAY_TOKEN:
         return JSONResponse({"status": "unauthorized"}, status_code=401)
     return JSONResponse(latest_tasks or {"goal": "", "tasks": [], "updated_by": "none"})
+
+# ═══════════════════════════════════════════════════════════════
+# Squad Sessions Proxy — /api/squad/sessions → agent /api/sessions
+# ═══════════════════════════════════════════════════════════════
+# Platform proxies (e.g. ModelScope) may block /api/sessions.
+# The frontend is patched to call /api/squad/sessions instead,
+# and this universal proxy forwards to the agent's real endpoint.
+
+@app.get("/api/squad/sessions")
+async def squad_sessions_get(request: Request):
+    agent_name = platform._webui_agent
+    agent = platform._squad_roster.get(agent_name, {})
+    if not agent:
+        return JSONResponse({"error": "agent not found"}, status_code=503)
+    target = f"http://127.0.0.1:{agent.get('ws_port', 20002)}/api/sessions"
+    headers = {k: v for k, v in request.headers.items()
+               if k.lower() not in ["host", "content-length"]}
+    try:
+        rp_resp = await _default_client.get(target, headers=headers)
+        return JSONResponse(rp_resp.json(), status_code=rp_resp.status_code)
+    except Exception as e:
+        log(f"❌ sessions proxy error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+@app.api_route("/api/squad/sessions/{path:path}",
+                methods=["GET", "POST", "DELETE"])
+async def squad_sessions_proxy(request: Request, path: str):
+    agent_name = platform._webui_agent
+    agent = platform._squad_roster.get(agent_name, {})
+    if not agent:
+        return JSONResponse({"error": "agent not found"}, status_code=503)
+    target = f"http://127.0.0.1:{agent.get('ws_port', 20002)}/api/sessions/{path}"
+    headers = {k: v for k, v in request.headers.items()
+               if k.lower() not in ["host", "content-length"]}
+    body = await request.body() or None
+    try:
+        rp_resp = await _default_client.request(
+            request.method, target, headers=headers, content=body)
+        return Response(content=rp_resp.content,
+                        status_code=rp_resp.status_code,
+                        headers=dict(rp_resp.headers))
+    except Exception as e:
+        log(f"❌ sessions proxy error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=502)
 
 # ═══════════════════════════════════════════════════════════════
 # WebSocket Proxy — Multiplexer v6.0 (multi-agent + cluster_log inject)
