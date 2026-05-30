@@ -13,8 +13,23 @@ from pathlib import Path
 from datetime import datetime
 from copy import deepcopy
 
-TEMPLATE = "/data/instances/_template/config.json"
-INSTANCES_ROOT = "/data/instances"
+# 从环境变量/squad_config 读取 data_root（跨平台：HF /data, MS /mnt/workspace）
+def _get_data_root():
+    """读取 data_root：优先 MOUNT_PATH env，其次 squad_config.json，兜底 /data"""
+    mount = os.environ.get('MOUNT_PATH', '')
+    if mount:
+        return mount
+    config_path = os.environ.get('SQUAD_CONFIG_PATH', '/app/squad_config.json')
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+        return cfg.get('data_root', '/data')
+    except Exception:
+        return '/data'
+
+DATA_ROOT = _get_data_root()
+TEMPLATE = os.path.join(DATA_ROOT, "instances/_template/config.json")
+INSTANCES_ROOT = os.path.join(DATA_ROOT, "instances")
 MAX_BACKUPS = 5  # keep last N backups per agent
 
 def _log(msg):
