@@ -41,10 +41,12 @@ RUN echo "💉 [Legion] kernel protocol patches..." && \
     echo "✅ kernel patches done"
 
 # ── 5. Legion: WebUI patches (BEFORE full install — npm build) ──
-COPY deploy/huggingface/patch_legion_v4_client.py /tmp/patch_legion_v4_client.py
-COPY deploy/huggingface/patch_legion_v6_sidebar.py /tmp/patch_legion_v6_sidebar.py
+COPY deploy/huggingface/patch_legion_v4_client.py /tmp/
+COPY deploy/huggingface/patch_legion_v6_sidebar.py /tmp/
+COPY deploy/huggingface/patch_webui_squad_sessions.py /tmp/
 RUN python3 /tmp/patch_legion_v4_client.py && \
     python3 /tmp/patch_legion_v6_sidebar.py && \
+    python3 /tmp/patch_webui_squad_sessions.py && \
     \
     # v0.2.0 sidebar uses radix-ui avatar + scroll-area; ensure deps are present
     cd /app/webui && \
@@ -58,8 +60,10 @@ RUN uv pip install --system --no-cache ".[matrix]"
 # ── 7. Legion: Python runtime patches (AFTER full install — site-packages now populated) ──
 COPY deploy/huggingface/patch_message_hardening.py /tmp/patch_message_hardening.py
 COPY deploy/huggingface/patch_squad_error_events.py /tmp/patch_squad_error_events.py
+COPY deploy/huggingface/patch_gatekeeper_identity.py /tmp/patch_gatekeeper_identity.py
 RUN python3 /tmp/patch_message_hardening.py && \
     python3 /tmp/patch_squad_error_events.py && \
+    python3 /tmp/patch_gatekeeper_identity.py && \
     echo "✅ runtime patches applied"
 
 # ── 8. Build WhatsApp bridge + version stamp ─────────────────
@@ -82,14 +86,21 @@ RUN mkdir -p /app/instances/_template /app/instances/neo-workspace/memory && \
     echo "✅ minimal seed created (_template + neo-workspace)"
 
 # ── 11. Legion: core scripts ───────────────────────────────
+COPY deploy/huggingface/squad_config.json /app/
+COPY deploy/huggingface/squad_config.hf-nightly.json /app/
+COPY deploy/huggingface/squad_config_loader.py /app/
+COPY deploy/huggingface/push_tasks.py /app/
+COPY deploy/huggingface/platform_setup.py /app/
+COPY deploy/huggingface/platforms/ /app/platforms/
 COPY deploy/huggingface/gatekeeper.py ./gatekeeper.py
 COPY deploy/huggingface/squad_bridge.py ./squad_bridge.py
 COPY deploy/huggingface/squad_config_sync.py ./squad_config_sync.py
+COPY deploy/huggingface/scripts/resurrect_neo.sh /app/scripts/resurrect_neo.sh
 
 # ── 12. User & permissions ─────────────────────────────────
 RUN useradd -m -u 1000 -s /bin/bash nanobot || true && \
     mkdir -p /home/nanobot/.nanobot && \
-    chmod +x /app/gatekeeper.py /app/squad_bridge.py /app/squad_config_sync.py && \
+    chmod +x /app/gatekeeper.py /app/squad_bridge.py /app/squad_config_sync.py /app/push_tasks.py /app/platform_setup.py /app/scripts/resurrect_neo.sh && \
     chown -R nanobot:nanobot /home/nanobot /app
 
 # ── 13. Entrypoint ──────────────────────────────────────────

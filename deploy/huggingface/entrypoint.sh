@@ -1,4 +1,24 @@
 #!/bin/bash
+set -e
+
+# ── 0. 平台配置选择（staging 已验证，结构平移） ─────────────────
+_choose_platform_config() {
+    local pf=""
+    if [ "${MODELSCOPE_ENVIRONMENT:-}" = "studio" ]; then
+        pf="ms-staging"
+    elif echo "${SPACE_ID:-}" | grep -qi "nanobotstaging"; then
+        pf="hf-staging"
+    elif echo "${SPACE_ID:-}" | grep -qi "multi-agent-nightly"; then
+        pf="hf-nightly"
+    fi
+    if [ -n "$pf" ] && [ -f "/app/squad_config.${pf}.json" ]; then
+        cp "/app/squad_config.${pf}.json" "/app/squad_config.json"
+        echo "📋 [Config] selected → squad_config.${pf}.json"
+    else
+        echo "📋 [Config] using default squad_config.json (platform: '${pf:-none}')"
+    fi
+}
+_choose_platform_config
 
 # 1. 基础环境配置
 export HOME="/home/nanobot"
@@ -30,6 +50,11 @@ if [ -z "$NANOBOT_PEER_NEO" ]; then
 else
     echo "✅ [System] 环境变量同步完成，已进入内存"
 fi
+
+# ── 平台环境初始化（staging 已验证，结构平移） ──
+echo "🧬 [System] 平台环境初始化..."
+eval "$(python3 /app/platform_setup.py)"
+echo "✅ [System] 平台初始化完成"
 
 # ---------------------------------------------------------
 # 💡 步骤：构建军团花名册 SQUAD_LEGION（从 NANOBOT_PEER_* 派生）
@@ -85,17 +110,14 @@ if [ -d "$MOUNT_PATH" ]; then
     echo "✅ [Storage] 持久化存储已链接"
 fi
 
-# 模板恢复: 存储优先，仅首次启动从镜像落种子
-if [ ! -d "/data/instances/_template" ]; then
-    if [ -d "/app/instances/_template" ]; then
-        mkdir -p "/data/instances"
-        cp -r /app/instances/_template /data/instances/_template
-        echo "🌱 [Template] 首次启动，从镜像落种子: /data/instances/_template/"
-    else
-        echo "⚠️ [Template] 镜像内无种子 (/app/instances/_template) — agent 将跳过"
-    fi
+# 模板恢复: 每次启动强制覆盖（确保模板更新生效）
+if [ -d "/app/instances/_template" ]; then
+    mkdir -p "/data/instances"
+    rm -rf /data/instances/_template
+    cp -r /app/instances/_template /data/instances/_template
+    echo "🔄 [Template] 模板已从镜像强制同步: /data/instances/_template/"
 else
-    echo "✅ [Template] 存储罐已有模板，跳过镜像覆盖"
+    echo "⚠️ [Template] 镜像内无备份 (/app/instances/_template) — agent 将跳过"
 fi
 
 # ---------------------------------------------------------
@@ -132,14 +154,10 @@ launch_agent() {
     local log_dir="/data/instances/$name/workspace/logs"
     mkdir -p "$workspace" "$log_dir"
 
-    # 注入军团知识 (仅首次/空工作区，尊重存储罐已有内容)
+    # 注入军团知识 (neo workspace files)
     if [ "$name" = "neo" ] && [ -d "/app/instances/neo-workspace" ]; then
-        if [ ! -f "$workspace/AGENTS.md" ]; then
-            cp -r /app/instances/neo-workspace/* "$workspace/"
-            echo "🧠 [$name] 军团知识已注入 (首次)"
-        else
-            echo "🧠 [$name] 工作区已存在，跳过注入"
-        fi
+        cp -r /app/instances/neo-workspace/* "$workspace/"
+        echo "🧠 [$name] 军团知识已注入"
     fi
 
     if [ -f "$config" ]; then
