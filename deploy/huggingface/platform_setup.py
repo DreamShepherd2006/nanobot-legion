@@ -13,6 +13,11 @@ import os
 # Ensure /app is on sys.path so we can import platforms + squad_config_loader
 sys.path.insert(0, "/app")
 
+# MUST import squad_config_loader BEFORE platforms!
+# It sets DEPLOY_PLATFORM at module level, which platforms._detect()
+# reads in matches() step 0 to override env-based detection.
+import squad_config_loader  # noqa: E402,F401
+
 from platforms import platform
 
 print(f"🧬 [Platform Setup] detected → {platform.name}", file=sys.stderr)
