@@ -1,8 +1,11 @@
 #!/bin/bash
-# Neo 自我复活脚本 V5 — 三路输出（文件 + 容器屏幕）
-# 调用方式: setsid bash /data/instances/neo/workspace/scripts/resurrect_neo.sh &
+# Neo 自我复活脚本 V6 — 三路输出（文件 + 容器屏幕），跨平台路径
+# 调用方式: setsid bash /app/scripts/resurrect_neo.sh &
 
-LOG_DIR="/data/instances/neo/workspace/logs"
+# ── 平台感知路径 ──
+DATA_ROOT="${MOUNT_PATH:-/data}"
+INSTANCE_ROOT="$DATA_ROOT/instances/neo"
+LOG_DIR="$INSTANCE_ROOT/workspace/logs"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/neo_resurrect.log"
 NEO_LOG="$LOG_DIR/neo.log"
@@ -13,7 +16,7 @@ mark() { echo "[$(date '+%H:%M:%S')] [resurrect] $*" | tee -a "$NEO_LOG"; }
 
 # ── 0. PATH ──
 export PATH="/home/nanobot/.local/bin:/usr/local/bin:/usr/bin:/bin"
-mark "⚡ Neo 复活脚本启动 (PID: $$)"
+mark "⚡ Neo 复活脚本 V6 启动 (PID: $$, DATA_ROOT=$DATA_ROOT)"
 
 # ── 1. 延迟 ──
 mark "等待 3 秒，确保原 Neo 安全退出..."
@@ -21,16 +24,19 @@ sleep 3
 
 # ── 2. 基础环境 ──
 export HOME="/home/nanobot"
-DIR="$HOME/.nanobot"
 export PYTHONPATH="/app:${PYTHONPATH:-}"
 export PYTHONDONTWRITEBYTECODE=1
 
 # ── 3. 环境变量注入 ──
-mark "正在注入 /proc/1/environ..."
-while IFS='=' read -r -d '' name value; do
-    export "$name"="$value"
-done < /proc/1/environ
-mark "环境变量注入完成"
+if [ -r /proc/1/environ ]; then
+    mark "正在注入 /proc/1/environ..."
+    while IFS='=' read -r -d '' name value; do
+        export "$name"="$value"
+    done < /proc/1/environ
+    mark "环境变量注入完成"
+else
+    mark "ℹ️  /proc/1/environ 不可读，依赖父进程继承"
+fi
 
 # ── 4. SQUAD_LEGION ──
 if [ -z "${SQUAD_LEGION:-}" ]; then
@@ -83,8 +89,8 @@ else
 fi
 
 # ── 7. 启动新 Neo ──
-CONFIG="$DIR/instances/neo/config.json"
-WORKSPACE="$DIR/instances/neo/workspace"
+CONFIG="$INSTANCE_ROOT/config.json"
+WORKSPACE="$INSTANCE_ROOT/workspace"
 GW_PORT=$(python3 -c "import json; print(json.load(open('$CONFIG'))['gateway']['port'])" 2>/dev/null)
 
 if [ -z "$GW_PORT" ]; then
