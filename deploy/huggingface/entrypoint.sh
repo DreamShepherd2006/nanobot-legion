@@ -38,7 +38,7 @@ echo "🧬 [System] 正在从系统根进程同步军团环境变量..."
 
 # 注意：从 /proc/1/environ 读取才能确保拿到容器启动时注入的原始变量
 while IFS='=' read -r -d '' name value; do
-    if [[ "$name" == NANOBOT_TOKEN ]] || [[ "$name" == NANOBOT_PEER_* ]] || [[ "$name" == SQUAD_LEGION ]]; then
+    if [[ "$name" == NANOBOT_TOKEN ]] || [[ "$name" == NANOBOT_PEER_* ]] || [[ "$name" == SQUAD_LEGION ]] || [[ "$name" == SPACE_ID ]] || [[ "$name" == SQUAD_RELAY_TOKEN_* ]]; then
         export "$name"="$value"
         echo "   >> 已解冻: $name"
     fi

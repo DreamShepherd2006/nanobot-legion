@@ -520,12 +520,12 @@ class ModelScopePlatform(PlatformProtocol):
             except Exception as exc:
                 _log(f"   ⚠️ env unfreeze failed: {exc}")
 
-        # 2. Map SQUAD_RELAY_TOKEN_modelscope → SQUAD_RELAY_TOKEN
-        if not _os.environ.get("SQUAD_RELAY_TOKEN") and _os.environ.get("SQUAD_RELAY_TOKEN_modelscope"):
-            tok = _os.environ["SQUAD_RELAY_TOKEN_modelscope"]
+        # 2. Map SQUAD_RELAY_TOKEN_MS_NanobotNightly → SQUAD_RELAY_TOKEN
+        if not _os.environ.get("SQUAD_RELAY_TOKEN") and _os.environ.get("SQUAD_RELAY_TOKEN_MS_NanobotNightly"):
+            tok = _os.environ["SQUAD_RELAY_TOKEN_MS_NanobotNightly"]
             exports.append(f"export SQUAD_RELAY_TOKEN='{tok}'")
             _os.environ["SQUAD_RELAY_TOKEN"] = tok
-            _log("   🔑 SQUAD_RELAY_TOKEN 已从 ms 映射")
+            _log("   🔑 SQUAD_RELAY_TOKEN mapped from SQUAD_RELAY_TOKEN_MS_NanobotNightly")
 
         # 3. Pull dataset from ModelScope
         dataset_dir = "/tmp/nanobot-legion-instances"
