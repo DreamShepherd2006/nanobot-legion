@@ -70,7 +70,7 @@ RUN uv pip install --system --no-cache \
 
 # ── 10. Legion: minimal instance seed (storage罐优先，此仅首次兜底) ─
 RUN mkdir -p /app/instances/_template /app/instances/neo-workspace/memory && \
-    echo '{"gateway":{"host":"0.0.0.0","port":0},"channels":{"websocket":{"port":0}},"tools":{"exec":{"allowed_env_keys":["NANOBOT_TOKEN","NANOBOT_PEER_*","SQUAD_*","COMMANDER_WHITELIST","USER_AGENT_MAP"]}}}' > /app/instances/_template/config.json && \
+    echo '{"gateway":{"host":"0.0.0.0","port":0},"channels":{"websocket":{"port":0}},"tools":{"exec":{"allowed_env_keys":["NANOBOT_TOKEN","NANOBOT_PEER_NEO","NANOBOT_PEER_TRINITY","NANOBOT_PEER_SENTINEL","NANOBOT_PEER_MEDIC","NANOBOT_PEER_ASSISTANT","SQUAD_RELAY_TOKEN","SQUAD_RELAY_TOKEN_HF_NanobotNightly","COMMANDER_WHITELIST","USER_AGENT_MAP"]}}}' > /app/instances/_template/config.json && \
     printf '📍 当前空间: Staging (Nanobot-Staging)\n→ 部署路径: deploy/huggingface/ | /data: 持久化\n' > /app/instances/neo-workspace/AGENTS.md && \
     echo "✅ minimal seed created (_template + neo-workspace)"
 
