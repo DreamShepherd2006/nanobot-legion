@@ -571,7 +571,19 @@ class ModelScopePlatform(PlatformProtocol):
         else:
             _log("⚠️ [Template] 无模板可用 — agent 将跳过")
 
-        # 5. Seed neo workspace from dataset
+        # 5. Restore agent configs from dataset (recovery for corrupted/missing configs)
+        for item in _os.listdir(dataset_dir):
+            item_path = _os.path.join(dataset_dir, item)
+            cfg_file = _os.path.join(item_path, "config.json")
+            if _os.path.isdir(item_path) and item not in ("_template", "neo-workspace", ".git") and _os.path.isfile(cfg_file):
+                dst_dir = f"{mount_path}/instances/{item}"
+                dst_cfg = f"{dst_dir}/config.json"
+                if not _os.path.exists(dst_cfg):
+                    _os.makedirs(dst_dir, exist_ok=True)
+                    _shutil.copy2(cfg_file, dst_cfg)
+                    _log(f"🆕 [{item}] config.json restored from dataset")
+
+        # 6. Seed neo workspace from dataset
         neo_ws = f"{mount_path}/instances/neo/workspace"
         seed_flag = f"{neo_ws}/.legion_seeded"
         if _os.path.isdir(f"{dataset_dir}/neo-workspace") and not _os.path.exists(seed_flag):
