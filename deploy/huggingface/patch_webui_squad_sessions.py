@@ -5,11 +5,12 @@ Problem: ModelScope platform proxy blocks /api/sessions/* (returns MS homepage),
 same as how it blocked /login and /auth.  Routing through /api/squad/*
 bypasses this interception.
 
-Target (pre-compile, before hatch_build runs npm):
-  - /app/webui/src/lib/api.ts → replace "/api/sessions" with "/api/squad/sessions"
+Additionally, MS platform proxy strips the Authorization header, so the
+Bearer token never reaches the agent.  Fixed by also appending ?token=
+as a query parameter fallback for session API calls.
 
-Dual-target NOT required: WebUI .ts patches are compiled into dist/,
-only the /app/webui/src/ copy matters before the Vite build step.
+Target (pre-compile, before hatch_build runs npm):
+  - /app/webui/src/lib/api.ts
 """
 
 from pathlib import Path
@@ -22,11 +23,36 @@ if not TARGET.exists():
 
 original = TARGET.read_text()
 
+# Step 1: Replace path /api/sessions → /api/squad/sessions
 patched = original.replace("/api/sessions", "/api/squad/sessions")
+
+# Step 2: Add ?token= query param to fetchSessions
+# Pattern after step 1:
+#   `${base}/api/squad/sessions`,
+#   token,
+# Replace with:
+#   `${base}/api/squad/sessions?token=${encodeURIComponent(token)}`,
+#   token,
+patched = patched.replace(
+    "`${base}/api/squad/sessions`,\n    token,",
+    "`${base}/api/squad/sessions?token=${encodeURIComponent(token)}`,\n    token,"
+)
+
+# Step 3: Add ?token= to fetchWebuiThread URL
+patched = patched.replace(
+    '`${base}/api/squad/sessions/${encodeURIComponent(key)}/webui-thread`',
+    '`${base}/api/squad/sessions/${encodeURIComponent(key)}/webui-thread?token=${encodeURIComponent(token)}`'
+)
+
+# Step 4: Add ?token= to deleteSession URL
+patched = patched.replace(
+    '`${base}/api/squad/sessions/${encodeURIComponent(key)}/delete`',
+    '`${base}/api/squad/sessions/${encodeURIComponent(key)}/delete?token=${encodeURIComponent(token)}`'
+)
 
 if patched == original:
     print("⚠️  No changes — already patched?")
     exit(0)
 
 TARGET.write_text(patched)
-print(f"✅ Patched {TARGET}: /api/sessions → /api/squad/sessions")
+print(f"✅ Patched {TARGET}: /api/sessions → /api/squad/sessions + ?token= fallback")
