@@ -38,9 +38,11 @@ RUN echo "💉 [Legion] kernel protocol patches..." && \
 COPY deploy/huggingface/patch_legion_v4_client.py /tmp/
 COPY deploy/huggingface/patch_legion_v6_sidebar.py /tmp/
 COPY deploy/huggingface/patch_webui_squad_sessions.py /tmp/
+COPY deploy/huggingface/patch_package_json_radix.py /tmp/
 RUN python3 /tmp/patch_legion_v4_client.py && \
     python3 /tmp/patch_legion_v6_sidebar.py && \
     python3 /tmp/patch_webui_squad_sessions.py && \
+    python3 /tmp/patch_package_json_radix.py && \
     echo "✅ legion webui patches applied"
 
 # ── 6. Full install (triggers hatch_build.py → npm build) ─
