@@ -132,6 +132,21 @@ class ModelScopePlatform(PlatformProtocol):
     def callback_route_path(self) -> str:
         return "/api/squad/auth/callback"
 
+    def _public_callback_url(self, request: Request) -> str:
+        """Override redirect_uri to use the public .ms.show domain instead of
+        the internal VPC address that ``request.url_for(...)`` would produce.
+
+        ModelScope Studio injects ``SPACE_ID`` = ``owner/repo``.  The public
+        show URL is ``https://{owner_lower}-{repo}.ms.show``.
+        """
+        space_id = os.environ.get("SPACE_ID", "")
+        if "/" in space_id:
+            owner, repo = space_id.split("/", 1)
+            return f"https://{owner.lower()}-{repo}.ms.show{self.callback_route_path}"
+        # Fallback: use request.url_for but force https
+        url = str(request.url_for("modelscope_callback"))
+        return url.replace("http://", "https://", 1)
+
     def register_oauth(self) -> OAuth:
         return _get_oauth_client()
 
@@ -148,7 +163,7 @@ class ModelScopePlatform(PlatformProtocol):
 
         client_id = os.environ.get("OAUTH_CLIENT_ID", "")
         client_secret = os.environ.get("OAUTH_CLIENT_SECRET", "")
-        redirect_uri = str(request.url_for("modelscope_callback"))
+        redirect_uri = self._public_callback_url(request)
 
         async with httpx.AsyncClient(timeout=15) as client:
             # Step 1 — exchange code for access token
@@ -332,7 +347,7 @@ class ModelScopePlatform(PlatformProtocol):
         @app.get("/api/squad/auth/login")
         async def modelscope_login(request: Request):
             _ensure_webui()
-            redirect_uri = str(request.url_for("modelscope_callback"))
+            redirect_uri = platform._public_callback_url(request)
             client_id = os.environ.get("OAUTH_CLIENT_ID", "")
             auth_url = (
                 f"https://modelscope.cn/oauth/authorize"
