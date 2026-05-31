@@ -17,7 +17,7 @@ WORKDIR /app
 # ── 2. Metadata-only install (Docker layer cache) ──────────
 COPY pyproject.toml README.md LICENSE THIRD_PARTY_NOTICES.md hatch_build.py ./
 RUN mkdir -p nanobot bridge && touch nanobot/__init__.py && \
-    uv pip install --system --no-cache . && \
+    uv pip install --system --no-cache ".[matrix]" && \
     rm -rf nanobot bridge
 
 # ── 3. Copy full source ───────────────────────────────────
@@ -44,7 +44,7 @@ RUN python3 /tmp/patch_legion_v4_client.py && \
     echo "✅ legion webui patches applied"
 
 # ── 6. Full install (triggers hatch_build.py → npm build) ─
-RUN uv pip install --system --no-cache .
+RUN uv pip install --system --no-cache ".[matrix]"
 
 # ── 7. Legion: Python runtime patches (AFTER full install — site-packages now populated) ──
 COPY deploy/huggingface/patch_message_hardening.py /tmp/
@@ -66,8 +66,7 @@ COPY deploy/huggingface/NANOBOT_COMMIT /app/NANOBOT_COMMIT
 # ── 9. Legion: extra Python dependencies ────────────────────
 RUN uv pip install --system --no-cache \
     fastapi uvicorn websockets authlib httpx itsdangerous tomli \
-    huggingface_hub joserfc websocket-client \
-    'matrix-nio[e2e]>=0.25.2'
+    huggingface_hub joserfc websocket-client
 
 # ── 10. Legion: minimal instance seed (storage罐优先，此仅首次兜底) ─
 RUN mkdir -p /app/instances/_template /app/instances/neo-workspace/memory && \
