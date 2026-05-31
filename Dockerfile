@@ -66,7 +66,8 @@ COPY deploy/huggingface/NANOBOT_COMMIT /app/NANOBOT_COMMIT
 # ── 9. Legion: extra Python dependencies ────────────────────
 RUN uv pip install --system --no-cache \
     fastapi uvicorn websockets authlib httpx itsdangerous tomli \
-    huggingface_hub joserfc websocket-client
+    huggingface_hub joserfc websocket-client \
+    'matrix-nio[e2e]>=0.25.2'
 
 # ── 10. Legion: minimal instance seed (storage罐优先，此仅首次兜底) ─
 RUN mkdir -p /app/instances/_template /app/instances/neo-workspace/memory && \

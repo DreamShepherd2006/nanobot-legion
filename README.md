@@ -13,7 +13,7 @@
 | 🎖️ | **多智能体协同** — 5 个专业智能体（Neo/Trinity/Sentinel/Assistant/Medic）通过 WebSocket 互联互通。指挥官可跨节点调度任务、查询状态、汇总结果。 |
 |-----|-----|
 | 🤖 | **自主运维** — Neo（军团指挥官）可自主完成上游版本适配验证：拉取最新代码 → 部署到 Staging → 检查构建/运行日志 → 验证通过后上报，无需人工介入。 |
-| 🔄 | **自愈机制** — `resurrect_neo.sh` + Gatekeeper v6.0 健康监控：Neo 离线超过 150 秒自动复活（保守阈值防止 DeepSeek 长时间思考误触发），冷却 300 秒。 |
+| 🔄 | **自愈机制** — `resurrect_neo.sh` V6 + Gatekeeper 健康监控：Neo 离线 > 150s 自动复活（跨平台路径 `$INSTANCE_ROOT`），冷却 300s。已通过 MS / HF Staging / HF Nightly 三平台实战验证。 |
 | 🛡️ | **OAuth + RBAC** — Hugging Face / ModelScope OAuth，三级权限：Commander（管理员）、Member（成员，可对话）、Guest（访客，只读）。 |
 | 🎨 | **动态 WebUI** — 实时智能体状态徽标（待命/执行中/阻塞/离线）、动态侧边栏编制、跨节点标签切换。全部由运行时环境变量驱动，零硬编码。 |
 | 🧪 | **多平台 CI/CD** — 双分支模型（`main` 稳定生产，`staging` 验证前沿），配置分离支持多平台（HF Staging / ModelScope Staging），新平台只需 +1 个 JSON 配置文件。 |
@@ -79,7 +79,7 @@ deploy/huggingface/
 |------|------|
 | `gatekeeper.py` | OAuth 网关（HF + ModelScope），三级权限控制（大小写精确匹配），HTTP/WS 代理，跨智能体中继，保活守护 |
 | `squad_bridge.py` | 智能体之间 WebSocket 消息通信网 |
-| `squad_config_sync.py` | 实例配置动态同步。**新 agent 从模板创建**，已有 agent 仅同步动态端口与白名单（不触碰 provider/model/ssrf）。**修改前自动备份**（`config.json.backup.{timestamp}`），保留最近 3 份。 |
+| `squad_config_sync.py` | 实例配置动态同步。**新 agent 从模板创建**，已有 agent 仅同步动态端口与白名单（不触碰 provider/model/ssrf）。**修改前自动备份**（`config.json.backup.{timestamp}`），保留最近 3 份。**自动清理根级污染**（`exec`、`allowed_env_keys`）。 |
 | `squad_config.json` | 兜底配置（当前 = Nightly）；平台专属 → `squad_config.{platform}.json` |
 | `squad_config_loader.py` | 配置加载器：从 `squad_config.json` 读取并注入 `DEPLOY_PLATFORM` 等环境变量 |
 | `platform_setup.py` | 平台探测入口：导入 `platforms/` → 调用对应 `setup()` → 输出 shell exports |
@@ -123,6 +123,14 @@ MIT — 继承自[上游](https://github.com/HKUDS/nanobot/blob/nightly/LICENSE)
 - ModelScope 验证空间：[Stone2006/nanobot-multi-agent-nightly](https://www.modelscope.cn/studios/Stone2006/nanobot-multi-agent-nightly)
 
 ## 最近更新
+
+`dd22e46` — 2026-05-31
+
+- 🩹 **复活机制全面修复**：`squad_config_sync` 根级 `allowed_env_keys` 清理（5/30 Pydantic 复活失败根因）
+- 🔄 `resurrect_neo.sh` V5→V6：跨平台路径 `$INSTANCE_ROOT`（原 `$HOME/.nanobot` 在 MS 不存在）
+- 🔧 `gatekeeper.py`：复活脚本路径改用 `platform.instance_path()` 动态解析
+- 🧪 **三平台复活实战验证通过**（MS / HF Staging / HF Nightly）
+- 🌐 `squad_bridge_cross.py` v2：跨空间 relay + 调用方白名单
 
 `80d2329` — 2026-05-29
 
