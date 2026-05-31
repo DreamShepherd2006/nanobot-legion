@@ -77,6 +77,7 @@ RUN mkdir -p /app/instances/_template /app/instances/neo-workspace/memory && \
 # ── 11. Legion: core scripts ───────────────────────────────
 COPY deploy/huggingface/gatekeeper.py ./gatekeeper.py
 COPY deploy/huggingface/squad_bridge.py ./squad_bridge.py
+COPY deploy/huggingface/squad_bridge_cross.py ./squad_bridge_cross.py
 COPY deploy/huggingface/squad_config_sync.py ./squad_config_sync.py
 COPY deploy/huggingface/squad_config.json ./squad_config.json
 COPY deploy/huggingface/squad_config.hf-staging.json ./squad_config.hf-staging.json
