@@ -82,6 +82,20 @@ class HFDirectPlatform(PlatformProtocol):
         self._commander_whitelist = get_commander_whitelist()
         self._user_agent_map = get_user_agent_map()
 
+    @staticmethod
+    def setup() -> str:
+        """Map platform-specific relay token → SQUAD_RELAY_TOKEN.
+
+        Convention: SQUAD_RELAY_TOKEN_HF_NanobotNightly
+        """
+        if os.environ.get("SQUAD_RELAY_TOKEN_HF_NanobotNightly") and not os.environ.get("SQUAD_RELAY_TOKEN"):
+            tok = os.environ["SQUAD_RELAY_TOKEN_HF_NanobotNightly"]
+            os.environ["SQUAD_RELAY_TOKEN"] = tok
+            _log(f"   🔑 SQUAD_RELAY_TOKEN mapped from SQUAD_RELAY_TOKEN_HF_NanobotNightly")
+            return f"export SQUAD_RELAY_TOKEN='{tok}'"
+        _log("   ⚠️ SQUAD_RELAY_TOKEN_HF_NanobotNightly not set")
+        return ""
+
     # ── OAuth ──
     def register_oauth(self) -> OAuth:
         starlette_config = StarletteConfig(environ=os.environ)
