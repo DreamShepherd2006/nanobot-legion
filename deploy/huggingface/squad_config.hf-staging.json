@@ -1,0 +1,21 @@
+{
+  "_comment": "Squad non-sensitive config for HF Staging (DreamShepherd2006/Nanobot-Staging)",
+  "deploy_platform": "hf-staging",
+  "data_root": "/data",
+  "webui_agent": "neo",
+  "commander_whitelist": ["Stone2006", "DreamShepherd2006"],
+  "user_agent_map": {
+    "DreamShepherd": "NANOBOT_PEER_MEDIC",
+    "Stone2006": "NANOBOT_PEER_NEO"
+  },
+  "relay_timeout": 120,
+  "gatekeeper_port": 7860,
+  "dlq_dir": "/data/dlq",
+  "peers": {
+    "neo":      {"id": "squad:commander", "gateway_port": 20001, "ws_port": 20002},
+    "trinity":  {"id": "squad:trinity",    "gateway_port": 20011, "ws_port": 20012},
+    "sentinel": {"id": "squad:sentinel",   "gateway_port": 20021, "ws_port": 20022},
+    "assistant":{"id": "squad:assistant",  "gateway_port": 20031, "ws_port": 20032},
+    "medic":    {"id": "squad:medic",      "gateway_port": 20041, "ws_port": 20042}
+  }
+}
