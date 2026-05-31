@@ -19,14 +19,17 @@ Examples:
   python3 /app/squad_bridge_cross.py --list
 
 安全模型:
+  • 调用者验证: 自动检测 agent 实例名，仅 CROSS_SPACE_SENDERS 白名单内可用
   • 发送方: token 自动从环境变量注入，agent 不可见 token 值
   • 接收方: 目标空间 gatekeeper 验证 sender 权限（白名单 + USER_AGENT_MAP）
   • 链路: correlation_id 全链路追踪
+  • 默认: 仅 neo 可跨空间 relay
 """
 
 import sys
 import json
 import os
+import re
 import time
 import uuid
 import urllib.request
@@ -67,6 +70,66 @@ def _make_correlation_id() -> str:
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     short = uuid.uuid4().hex[:4]
     return f"xs-{ts}-{short}"
+
+
+def _detect_self() -> str:
+    """Auto-detect this agent's name by walking the parent process tree
+    to find the nanobot gateway process and extracting the instance name
+    from its --config path.
+
+    Returns 'unknown' if detection fails.
+    """
+    ppid = os.getppid()
+    for _ in range(10):  # max parent chain depth
+        try:
+            cmdline_path = f'/proc/{ppid}/cmdline'
+            status_path = f'/proc/{ppid}/status'
+
+            # Read cmdline
+            with open(cmdline_path, 'rb') as f:
+                cmd = f.read().decode(errors='replace')
+
+            # Look for nanobot gateway pattern
+            if 'nanobot gateway' in cmd:
+                m = re.search(r'/instances/([^/]+)/config\.json', cmd)
+                if m:
+                    return m.group(1)
+
+            # Go to grandparent
+            with open(status_path) as f:
+                for line in f:
+                    if line.startswith('PPid:'):
+                        ppid = int(line.split()[1])
+                        break
+                else:
+                    break
+            if ppid <= 1:
+                break
+        except (OSError, ValueError, IndexError):
+            break
+    return 'unknown'
+
+
+def _check_permission() -> bool:
+    """Check if this agent is allowed to use cross-space relay.
+
+    Reads CROSS_SPACE_SENDERS env var (comma-separated agent names).
+    Auto-detects caller via _detect_self().
+    Default: only 'neo' allowed.
+    """
+    allowed_raw = os.environ.get('CROSS_SPACE_SENDERS', 'neo').strip()
+    allowed = {s.strip() for s in allowed_raw.split(',') if s.strip()}
+    self_name = _detect_self()
+
+    if self_name in allowed:
+        return True
+
+    print(f'🚫 跨空间 relay 权限拒绝')
+    print(f'   调用者: {self_name}')
+    print(f'   白名单: {", ".join(sorted(allowed))}')
+    if self_name == 'unknown':
+        print(f'   (自动检测失败 — 可能是 exec 沙箱限制)')
+    return False
 
 
 def _detect_current_space() -> str:
@@ -123,6 +186,10 @@ def main() -> None:
     message = " ".join(sys.argv[4:])
     cid = _make_correlation_id()
     current = _detect_current_space()
+
+    # ── Permission check ─────────────────────────────────────
+    if not _check_permission():
+        sys.exit(3)
 
     # ── Validate space ────────────────────────────────────────
     if space not in SPACE_CONFIG:
