@@ -75,17 +75,19 @@ deploy/huggingface/
 
 ## 组件
 
-| 文件 | 功能 |
-|------|------|
-| `gatekeeper.py` | OAuth 网关（HF + ModelScope），三级权限控制（大小写精确匹配），HTTP/WS 代理，跨智能体中继，保活守护 |
-| `squad_bridge.py` | 智能体之间 WebSocket 消息通信网 |
-| `squad_config_sync.py` | 实例配置动态同步。**新 agent 从模板创建**，已有 agent 仅同步动态端口与白名单（不触碰 provider/model/ssrf）。**修改前自动备份**（`config.json.backup.{timestamp}`），保留最近 3 份。**自动清理根级污染**（`exec`、`allowed_env_keys`）。 |
-| `squad_config.json` | 兜底配置（当前 = Nightly）；平台专属 → `squad_config.{platform}.json` |
-| `squad_config_loader.py` | 配置加载器：从 `squad_config.json` 读取并注入 `DEPLOY_PLATFORM` 等环境变量 |
-| `platform_setup.py` | 平台探测入口：导入 `platforms/` → 调用对应 `setup()` → 输出 shell exports |
-| `platforms/` | 平台抽象层：`base.py`（Protocol）、`hf_staging.py`、`hf_direct.py`、`modelscope.py` |
-| `Dockerfile` | 多阶段构建，合并上游 nanobot + 军团部署层 + 补丁打入 |
-| `entrypoint.sh` | 运行时初始化：平台检测 → 自动选配 → 实例模板下发 → neo workspace 知识注入 → 补丁注入 |
+| 文件 | 功能 | 分支 |
+|------|------|------|
+| `gatekeeper.py` | OAuth 网关（HF + ModelScope），三级权限控制，HTTP/WS 代理，跨智能体中继，保活守护 | 共用 |
+| `squad_bridge.py` | 智能体之间 WebSocket 消息通信网 | 共用 |
+| `squad_bridge_cross.py` | 跨空间 relay（Staging → Nightly），本地调用方白名单 + 远程 token 认证 | `staging` |
+| `squad_config_sync.py` | 实例配置动态同步。新 agent 从模板创建，已有 agent 仅同步动态端口与白名单。修改前自动备份，保留最近 3 份。 | 共用 |
+| `push_tasks.py` | 任务进度推送：结构化 JSON `task_update` 事件注入 gatekeeper，前端 LegionTerminal 实时展示 | `staging` |
+| `platforms/` | 平台抽象层：`base.py`（Protocol）+ `hf_staging.py` + `hf_direct.py` + `modelscope.py`，零平台分支的主代码 | `staging` |
+| `squad_config_loader.py` | 配置加载器：从 `squad_config.json` 读取并注入 `DEPLOY_PLATFORM`、`data_root` 等环境变量 | `staging` |
+| `platform_setup.py` | 平台探测入口：导入 `platforms/` → 调用 `setup()` → 运行时环境配置 | `staging` |
+| `squad_config.{platform}.json` | 平台专属配置（数据根、端口、权限）。`main` 用单一 `squad_config.json`。 | `staging` |
+| `Dockerfile` | 多阶段构建，合并上游 nanobot + 军团部署层 + 补丁打入。支持 `.[matrix]` extras 安装 Matrix 通道依赖。 | 共用 |
+| `entrypoint.sh` | 运行时初始化：平台检测 → 自动选配 → 实例模板下发 → workspace 知识注入 → 补丁注入 → 保活 | 共用 |
 
 ### 补丁
 
@@ -95,10 +97,11 @@ deploy/huggingface/
 |------|------|------|
 | `patch_legion_v6_sidebar.py` | `webui/src/components/Sidebar.tsx` | 注入 LegionRoster + LegionTerminal 组件（动态编制、状态徽标、任务追踪面板） |
 | `patch_legion_v4_client.py` | `webui/src/NanobotClient.tsx` | 注入 onAnyEvent 拦截器（`legion_update` / `cluster_log` / `task_update` 事件路由） |
-| `patch_message_hardening.py` | `nanobot/providers/openai_compat_provider.py` | DeepSeek 消息内容清洗（移除 "(empty)" 占位符、保留 tool_calls 下的文本） |
-| `patch_squad_error_events.py` | `nanobot/channels/websocket.py` | squad bridge 权限错误事件发射（双目标：`/app/` + `site-packages/`） |
-
-> ⚠️ `patch_bootstrap_peers.py` 已移除（上游 v0.2.0 已原生支持 `_read_peers`，该补丁无消费者，属于死代码）。
+| `patch_message_hardening.py` | `nanobot/providers/openai_compat_provider.py` | DeepSeek 消息内容清洗（移除 "(empty)" 占位符，保留 tool_calls 下的文本） |
+| `patch_squad_error_events.py` | `nanobot/channels/websocket.py` | 为 squad bridge 提供结构化 error 事件（双目标：`/app/` + `site-packages/`） |
+| `patch_gatekeeper_identity.py` | `nanobot/channels/manager.py` | 注入 OAuth 身份（`sender_id` / `sender_name`）到 relay 消息，跨空间身份透传 |
+| `patch_webui_squad_sessions.py` | `webui/src/` API 调用 | `/api/sessions` 重写为 `/api/squad/sessions?token=`（ModelScope 沙箱绕过） |
+| `patch_package_json_radix.py` | `webui/package.json` | 构建时注入 `@radix-ui/react-avatar` + `react-scroll-area` 依赖 ⭐ v0.2.0 新增 |
 
 ## 快速开始
 
