@@ -582,6 +582,15 @@ class ModelScopePlatform(PlatformProtocol):
                 _shutil.copy2(cfg_file, dst_cfg)
                 _log(f"🔄 [{item}] config.json restored from dataset")
 
+        # 5b. Restore squad_config from dataset (user-editable via dataset web UI)
+        squad_cfg_ds = f"{dataset_dir}/squad_config.ms-staging.json"
+        squad_cfg_persist = f"{mount_path}/squad_config.json"
+        if _os.path.isfile(squad_cfg_ds):
+            _shutil.copy2(squad_cfg_ds, squad_cfg_persist)
+            _log("🔄 [Config] squad_config restored from dataset")
+        else:
+            _log("ℹ️ [Config] 数据集中无 squad_config，使用持久化版本")
+
         # 6. Seed neo workspace from dataset
         neo_ws = f"{mount_path}/instances/neo/workspace"
         seed_flag = f"{neo_ws}/.legion_seeded"
