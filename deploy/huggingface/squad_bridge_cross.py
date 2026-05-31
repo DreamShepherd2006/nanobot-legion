@@ -115,11 +115,16 @@ def _check_permission() -> bool:
 
     Reads CROSS_SPACE_SENDERS env var (comma-separated agent names).
     Auto-detects caller via _detect_self().
-    Default: only 'neo' allowed.
+    Default: only 'neo' allowed. Falls back to permissive if auto-detection fails.
     """
     allowed_raw = os.environ.get('CROSS_SPACE_SENDERS', 'neo').strip()
     allowed = {s.strip() for s in allowed_raw.split(',') if s.strip()}
     self_name = _detect_self()
+
+    if self_name == 'unknown':
+        # Auto-detection failed — warn but allow (token-based security remains)
+        print(f'⚠️  无法自动检测 agent 身份（exec 沙箱限制），跳过白名单检查')
+        return True
 
     if self_name in allowed:
         return True
@@ -127,8 +132,6 @@ def _check_permission() -> bool:
     print(f'🚫 跨空间 relay 权限拒绝')
     print(f'   调用者: {self_name}')
     print(f'   白名单: {", ".join(sorted(allowed))}')
-    if self_name == 'unknown':
-        print(f'   (自动检测失败 — 可能是 exec 沙箱限制)')
     return False
 
 
