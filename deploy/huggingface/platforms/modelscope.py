@@ -18,7 +18,6 @@ import os
 from typing import Any
 
 import httpx
-from starlette.responses import RedirectResponse
 from authlib.integrations.starlette_client import OAuth
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse, Response
@@ -279,10 +278,11 @@ class ModelScopePlatform(PlatformProtocol):
         return "guest"
 
     def create_auth_middleware(self) -> BaseHTTPMiddleware:
-        """OAuth-gated auth for ModelScope.
+        """Lightweight auth for ModelScope.
 
-        Redirects to MS OAuth login for unauthenticated visitors,
-        mirroring HF Staging's ForceAuthMiddleware behaviour.
+        ModelScope platform does NOT inject OAuth at proxy level;
+        the gatekeeper handles login page injection at the root route.
+        This middleware only ensures a session user is set (guest fallback).
         """
         platform = self  # capture for closure
 
@@ -297,10 +297,10 @@ class ModelScopePlatform(PlatformProtocol):
                 if path.startswith("/api/squad/"):
                     return await call_next(request)
 
-                # Redirect unauthenticated visitors to MS OAuth login
+                # Ensure session user exists
                 if not request.session.get("user"):
-                    login_url = str(request.url_for("modelscope_login")).replace("http://", "https://")
-                    return RedirectResponse(url=login_url)
+                    username = platform._guess_username(request)
+                    request.session["user"] = {"username": username, "name": username}
 
                 return await call_next(request)
 

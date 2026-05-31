@@ -921,11 +921,42 @@ async def ws_proxy(path: str, client_ws: WebSocket):
 
 @app.get("/")
 async def index(request: Request):
-    """Serve nanobot WebUI landing page — proxy to agent ws_port for real index.html."""
+    """Serve login page for guests, or proxy to agent WebUI for authenticated users."""
     session_user = request.session.get("user")
     uname = "Unknown"
     if isinstance(session_user, dict):
         uname = session_user.get("preferred_username") or session_user.get("username") or "Unknown"
+
+    # Guests see a login page (MS iframe blocks redirects, so we serve a page with a button)
+    if uname.lower() in ("guest", "unknown"):
+        login_url = "/api/squad/auth/login"
+        return HTMLResponse(content=f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nanobot Legion — MS Staging</title>
+<style>
+  * {{ margin:0; padding:0; box-sizing:border-box; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background:#0f0f0f; color:#e0e0e0; display:flex; align-items:center; justify-content:center; min-height:100vh; }}
+  .card {{ background:#1a1a1a; border:1px solid #333; border-radius:12px; padding:48px 40px; text-align:center; max-width:420px; width:90%; }}
+  h1 {{ font-size:1.4rem; margin-bottom:12px; color:#fff; }}
+  p {{ color:#999; margin-bottom:24px; line-height:1.6; }}
+  .btn {{ display:inline-block; background:#1677ff; color:#fff; padding:12px 32px; border-radius:8px; text-decoration:none; font-weight:600; font-size:1rem; transition:background .2s; }}
+  .btn:hover {{ background:#4096ff; }}
+  .hint {{ margin-top:20px; font-size:0.8rem; color:#666; }}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>🐈 Nanobot Legion</h1>
+    <p>请使用 ModelScope 账号登录以访问指挥中心。</p>
+    <a class="btn" href="{login_url}" target="_blank">🔑 使用 ModelScope 登录</a>
+    <p class="hint">登录完成后请刷新本页面</p>
+  </div>
+</body>
+</html>""", status_code=200)
+
     target_agent = get_agent_for_user(uname)
     client = _http_clients.get(target_agent, _default_client)
     if not client:
