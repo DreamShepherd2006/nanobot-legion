@@ -141,7 +141,7 @@ def resolve_user_context(request) -> tuple[str, str, int | None]:
     session_user = request.session.get("user")
     uname = ""
     if isinstance(session_user, dict):
-        uname = session_user.get("preferred_username") or session_user.get("username") or ""
+        uname = session_user.get("preferred_username") or session_user.get("username") or session_user.get("name") or ""
     target_agent = platform.get_agent_for_user(uname) if uname else WEBUI_AGENT
     ws_port = SQUAD_ROSTER.get(target_agent, {}).get("ws_port")
     return uname, target_agent, ws_port
@@ -734,12 +734,18 @@ async def squad_sessions_get(request: Request):
     _uname, target_agent, ws_port = resolve_user_context(request)
     if not ws_port:
         ws_port = SQUAD_ROSTER.get(WEBUI_AGENT, {}).get("ws_port", 20002)
+
+    token = request.query_params.get("token", "")
     target = f"http://127.0.0.1:{ws_port}/api/sessions"
-    headers = {k: v for k, v in request.headers.items()
-               if k.lower() not in ["host", "content-length"]}
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
-        rp_resp = await _default_client.get(target, headers=headers)
-        return JSONResponse(rp_resp.json(), status_code=rp_resp.status_code)
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(target, headers=headers)
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            media_type=resp.headers.get("content-type", "application/json"),
+        )
     except Exception as e:
         log(f"❌ sessions proxy error: {e}")
         return JSONResponse({"error": str(e)}, status_code=502)
@@ -750,16 +756,22 @@ async def squad_sessions_proxy(request: Request, path: str):
     _uname, target_agent, ws_port = resolve_user_context(request)
     if not ws_port:
         ws_port = SQUAD_ROSTER.get(WEBUI_AGENT, {}).get("ws_port", 20002)
+
+    token = request.query_params.get("token", "")
     target = f"http://127.0.0.1:{ws_port}/api/sessions/{path}"
-    headers = {k: v for k, v in request.headers.items()
-               if k.lower() not in ["host", "content-length"]}
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     body = await request.body() or None
     try:
-        rp_resp = await _default_client.request(
-            request.method, target, headers=headers, content=body)
-        return Response(content=rp_resp.content,
-                        status_code=rp_resp.status_code,
-                        headers=dict(rp_resp.headers))
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.request(
+                request.method, target,
+                headers=headers, content=body,
+            )
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            media_type=resp.headers.get("content-type", "application/json"),
+        )
     except Exception as e:
         log(f"❌ sessions proxy error: {e}")
         return JSONResponse({"error": str(e)}, status_code=502)
