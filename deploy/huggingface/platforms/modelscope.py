@@ -136,15 +136,44 @@ class ModelScopePlatform(PlatformProtocol):
         """Override redirect_uri to use the public .ms.show domain instead of
         the internal VPC address that ``request.url_for(...)`` would produce.
 
-        ModelScope Studio injects ``SPACE_ID`` = ``owner/repo``.  The public
-        show URL is ``https://{owner_lower}-{repo}.ms.show``.
+        Priority: SPACE_ID env → X-Forwarded-Host header → Referer header → fallback
         """
+        callback = self.callback_route_path
+
+        # 1. SPACE_ID env (if unfreeze worked)
         space_id = os.environ.get("SPACE_ID", "")
+        logger.info(f"[OAuth] SPACE_ID = {space_id!r}")
         if "/" in space_id:
             owner, repo = space_id.split("/", 1)
-            return f"https://{owner.lower()}-{repo}.ms.show{self.callback_route_path}"
-        # Fallback: use request.url_for but force https
+            url = f"https://{owner.lower()}-{repo}.ms.show{callback}"
+            logger.info(f"[OAuth] redirect_uri (SPACE_ID)  = {url}")
+            return url
+
+        # 2. X-Forwarded-Host (MS proxy may set the public host)
+        fwd_host = request.headers.get("X-Forwarded-Host", "")
+        logger.info(f"[OAuth] X-Forwarded-Host = {fwd_host!r}")
+        if ".ms.show" in fwd_host or "modelscope.cn" in fwd_host:
+            url = f"https://{fwd_host}{callback}"
+            logger.info(f"[OAuth] redirect_uri (XFH)    = {url}")
+            return url
+
+        # 3. Referer header (browser sends public URL when clicking Login)
+        referer = request.headers.get("Referer", "")
+        logger.info(f"[OAuth] Referer          = {referer!r}")
+        if ".ms.show" in referer or "modelscope.cn" in referer:
+            from urllib.parse import urlparse
+            parsed = urlparse(referer)
+            url = f"{parsed.scheme}://{parsed.hostname}{callback}"
+            logger.info(f"[OAuth] redirect_uri (Ref) = {url}")
+            return url
+
+        # 4. X-Forwarded-For / Host reconstruction
+        host = request.headers.get("host", "")
+        logger.info(f"[OAuth] Host              = {host!r}")
+
+        # 5. Last resort: request.url_for (will produce VPC URL — broken)
         url = str(request.url_for("modelscope_callback"))
+        logger.warning(f"[OAuth] FALLBACK redirect_uri = {url}")
         return url.replace("http://", "https://", 1)
 
     def register_oauth(self) -> OAuth:
