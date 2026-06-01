@@ -413,12 +413,27 @@ class ModelScopePlatform(PlatformProtocol):
 
         @app.get("/api/squad/sessions")
         async def proxy_sessions_list(request: Request):
-            _ensure_webui()
             token = request.query_params.get("token", "")
             if not token:
                 token = request.headers.get("Authorization", "").removeprefix("Bearer ")
-            target = f"http://127.0.0.1:{_webui_ws_port}/api/sessions"
+
+            # Route to the user's assigned agent, not always WEBUI_AGENT.
+            # DreamShepherd → Medic's WebUI → Medic token → Medic's /api/sessions.
+            target_agent = platform._webui_agent  # default: neo
+            session_user = request.session.get("user")
+            if isinstance(session_user, dict):
+                uname = session_user.get("preferred_username") or session_user.get("username") or ""
+                if uname:
+                    target_agent = platform.get_agent_for_user(uname)
+
+            target_ws_port = platform._squad_roster.get(target_agent, {}).get("ws_port")
+            if not target_ws_port:
+                _ensure_webui()
+                target_ws_port = _webui_ws_port
+
+            target = f"http://127.0.0.1:{target_ws_port}/api/sessions"
             headers = {"Authorization": f"Bearer {token}"} if token else {}
+            logger.info("sessions proxy → %s (port %s)", target_agent, target_ws_port)
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(target, headers=headers)
                 return Response(
@@ -432,11 +447,24 @@ class ModelScopePlatform(PlatformProtocol):
             methods=["GET", "POST", "DELETE", "PUT", "PATCH"],
         )
         async def proxy_sessions_wildcard(request: Request, path: str):
-            _ensure_webui()
             token = request.query_params.get("token", "")
             if not token:
                 token = request.headers.get("Authorization", "").removeprefix("Bearer ")
-            target = f"http://127.0.0.1:{_webui_ws_port}/api/sessions/{path}"
+
+            # Route to the user's assigned agent
+            target_agent = platform._webui_agent
+            session_user = request.session.get("user")
+            if isinstance(session_user, dict):
+                uname = session_user.get("preferred_username") or session_user.get("username") or ""
+                if uname:
+                    target_agent = platform.get_agent_for_user(uname)
+
+            target_ws_port = platform._squad_roster.get(target_agent, {}).get("ws_port")
+            if not target_ws_port:
+                _ensure_webui()
+                target_ws_port = _webui_ws_port
+
+            target = f"http://127.0.0.1:{target_ws_port}/api/sessions/{path}"
             headers = {"Authorization": f"Bearer {token}"} if token else {}
             body = await request.body()
             async with httpx.AsyncClient(timeout=30) as client:
