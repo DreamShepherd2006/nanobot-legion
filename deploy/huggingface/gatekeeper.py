@@ -129,6 +129,24 @@ def get_agent_for_user(username: str) -> str:
     """返回该用户对应的 agent name → 委托给 platform 模块."""
     return platform.get_agent_for_user(username)
 
+
+def resolve_user_context(request) -> tuple[str, str, int | None]:
+    """从 OAuth session 解析 (username, target_agent, ws_port).
+
+    统一入口：HTTP 代理层（index、catch-all、sessions）通过此函数
+    确定当前请求应路由到哪个 agent，避免各处重复 session 解析逻辑。
+    """
+    if not hasattr(request, "session"):
+        return "", WEBUI_AGENT, SQUAD_ROSTER.get(WEBUI_AGENT, {}).get("ws_port")
+    session_user = request.session.get("user")
+    uname = ""
+    if isinstance(session_user, dict):
+        uname = session_user.get("preferred_username") or session_user.get("username") or ""
+    target_agent = platform.get_agent_for_user(uname) if uname else WEBUI_AGENT
+    ws_port = SQUAD_ROSTER.get(target_agent, {}).get("ws_port")
+    return uname, target_agent, ws_port
+
+
 # Per-agent HTTP clients for dynamic user → agent HTTP proxying
 _http_clients = {}
 for _name, _info in SQUAD_ROSTER.items():
@@ -706,14 +724,17 @@ async def squad_tasks_get(request: Request):
 # Platform proxies (e.g. ModelScope) may block /api/sessions.
 # The frontend is patched to call /api/squad/sessions instead,
 # and this universal proxy forwards to the agent's real endpoint.
+#
+# 2026-06-01: 改为按用户路由 (resolve_user_context),
+# 而非始终请求 WEBUI_AGENT (Neo)。此前 DreamShepherd → Medic WebUI
+# → Medic token → Neo /api/sessions → 401。
 
 @app.get("/api/squad/sessions")
 async def squad_sessions_get(request: Request):
-    agent_name = platform._webui_agent
-    agent = platform._squad_roster.get(agent_name, {})
-    if not agent:
-        return JSONResponse({"error": "agent not found"}, status_code=503)
-    target = f"http://127.0.0.1:{agent.get('ws_port', 20002)}/api/sessions"
+    _uname, target_agent, ws_port = resolve_user_context(request)
+    if not ws_port:
+        ws_port = SQUAD_ROSTER.get(WEBUI_AGENT, {}).get("ws_port", 20002)
+    target = f"http://127.0.0.1:{ws_port}/api/sessions"
     headers = {k: v for k, v in request.headers.items()
                if k.lower() not in ["host", "content-length"]}
     try:
@@ -726,11 +747,10 @@ async def squad_sessions_get(request: Request):
 @app.api_route("/api/squad/sessions/{path:path}",
                 methods=["GET", "POST", "DELETE"])
 async def squad_sessions_proxy(request: Request, path: str):
-    agent_name = platform._webui_agent
-    agent = platform._squad_roster.get(agent_name, {})
-    if not agent:
-        return JSONResponse({"error": "agent not found"}, status_code=503)
-    target = f"http://127.0.0.1:{agent.get('ws_port', 20002)}/api/sessions/{path}"
+    _uname, target_agent, ws_port = resolve_user_context(request)
+    if not ws_port:
+        ws_port = SQUAD_ROSTER.get(WEBUI_AGENT, {}).get("ws_port", 20002)
+    target = f"http://127.0.0.1:{ws_port}/api/sessions/{path}"
     headers = {k: v for k, v in request.headers.items()
                if k.lower() not in ["host", "content-length"]}
     body = await request.body() or None
@@ -922,10 +942,9 @@ async def ws_proxy(path: str, client_ws: WebSocket):
 @app.get("/")
 async def index(request: Request):
     """Serve login page for guests, or proxy to agent WebUI for authenticated users."""
-    session_user = request.session.get("user")
-    uname = "Unknown"
-    if isinstance(session_user, dict):
-        uname = session_user.get("preferred_username") or session_user.get("username") or "Unknown"
+    uname, target_agent, _ws_port = resolve_user_context(request)
+    if not uname:
+        uname = "Unknown"
 
     # Guests see a login page (MS iframe blocks redirects, so we serve a page with a button)
     if uname.lower() in ("guest", "unknown"):
@@ -957,7 +976,6 @@ async def index(request: Request):
 </body>
 </html>""", status_code=200)
 
-    target_agent = get_agent_for_user(uname)
     client = _http_clients.get(target_agent, _default_client)
     if not client:
         return HTMLResponse("<h1>Staging: no agent available</h1>", status_code=503)
@@ -981,12 +999,10 @@ async def proxy(request: Request, path: str = ""):
     """Proxy all unmatched HTTP traffic to the appropriate agent's ws_port."""
     from fastapi.responses import StreamingResponse, Response
 
-    session_user = request.session.get("user")
-    uname = "Unknown"
-    if isinstance(session_user, dict):
-        uname = session_user.get("preferred_username") or session_user.get("username") or session_user.get("name") or "Unknown"
+    uname, target_agent, _ws_port = resolve_user_context(request)
+    if not uname:
+        uname = "Unknown"
 
-    target_agent = get_agent_for_user(uname)
     client = _http_clients.get(target_agent, _default_client)
     if not client:
         return Response(content="No agent available", status_code=503)
