@@ -18,9 +18,9 @@ export PATH="/home/nanobot/.local/bin:$PATH"
 export PYTHONPATH="/app:${PYTHONPATH}"
 export PYTHONDONTWRITEBYTECODE=1
 
-# ── 1. Route to squad if Legion mode ──────────────────────────────
-if [ "${SQUAD_LEGION:-}" = "true" ]; then
-    echo "🦁 Squad Legion mode — delegating to launch.sh"
+# ── 1. Route to squad if Legion layer present ─────────────────────
+if [ -x /app/deploy/huggingface/launch.sh ]; then
+    echo "🦁 Squad Legion layer detected — delegating to launch.sh"
     exec /app/deploy/huggingface/launch.sh
 fi
 

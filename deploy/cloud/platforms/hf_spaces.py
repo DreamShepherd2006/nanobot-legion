@@ -16,7 +16,7 @@ import sys
 from typing import Any
 
 import httpx
-from authlib.integrations.starlette_client import OAuth, StarletteConfig
+from authlib.integrations.starlette_client import OAuth
 
 from platforms.base import CloudPlatformProtocol
 
@@ -43,8 +43,7 @@ class HFSpacesPlatform(CloudPlatformProtocol):
     # ── OAuth ──
 
     def register_oauth(self) -> Any:
-        starlette_config = StarletteConfig(environ=os.environ)
-        oauth = OAuth(starlette_config)
+        oauth = OAuth()
         cid = os.environ.get("OAUTH_CLIENT_ID", "")
         cs = os.environ.get("OAUTH_CLIENT_SECRET")
         _log(f"OAuth CLIENT_ID: {cid[:8]}...  SECRET={'SET' if cs else 'MISSING'}")
