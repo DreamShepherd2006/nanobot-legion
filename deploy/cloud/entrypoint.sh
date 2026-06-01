@@ -46,5 +46,5 @@ ln -sfn "$DATA_ROOT/instances" "$HOME/.nanobot/instances" 2>/dev/null || true
 echo "✅ Storage linked"
 
 # ── 4. Launch ─────────────────────────────────────────────────────
-echo "☁️  Starting nanobot..."
-exec nanobot run
+echo "☁️  Starting nanobot gateway..."
+exec nanobot gateway --port 7860 --workspace "$DATA_ROOT/instances"
