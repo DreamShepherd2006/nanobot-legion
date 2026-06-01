@@ -91,6 +91,12 @@ COPY deploy/huggingface/platform_setup.py ./platform_setup.py
 COPY deploy/huggingface/platforms/ ./platforms/
 COPY deploy/huggingface/scripts/resurrect_neo.sh /app/scripts/resurrect_neo.sh
 
+# ── 11b. Legion: cloud platform layer ───────────────────────
+COPY deploy/cloud/platform_setup.py /app/deploy/cloud/platform_setup.py
+COPY deploy/cloud/platforms/ /app/deploy/cloud/platforms/
+COPY deploy/cloud/entrypoint.sh /app/deploy/cloud/entrypoint.sh
+RUN sed -i 's/\r$//' /app/deploy/cloud/entrypoint.sh && chmod +x /app/deploy/cloud/entrypoint.sh
+
 # ── 12. User & permissions ─────────────────────────────────
 RUN useradd -m -u 1000 -s /bin/bash nanobot && \
     mkdir -p /home/nanobot/.nanobot && \
@@ -98,12 +104,14 @@ RUN useradd -m -u 1000 -s /bin/bash nanobot && \
     chown -R nanobot:nanobot /home/nanobot /app
 
 # ── 13. Entrypoint ──────────────────────────────────────────
-COPY deploy/huggingface/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/entrypoint.sh
+# Cloud entrypoint (router) → delegates to squad launch.sh
+COPY deploy/huggingface/launch.sh /app/deploy/huggingface/launch.sh
+RUN sed -i 's/\r$//' /app/deploy/huggingface/launch.sh && chmod +x /app/deploy/huggingface/launch.sh
 
 USER nanobot
-ENV HOME=/home/nanobot
+ENV HOME=/home/nanobot \
+    SQUAD_LEGION=true
 
 EXPOSE 7860
 
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["/app/deploy/cloud/entrypoint.sh"]
