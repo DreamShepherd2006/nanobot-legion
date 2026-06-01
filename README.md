@@ -18,6 +18,7 @@
 | 🎨 | **动态 WebUI** — 实时智能体状态徽标（待命/执行中/阻塞/离线）、动态侧边栏编制、跨节点标签切换。全部由运行时环境变量驱动，零硬编码。 |
 | 🧪 | **多平台 CI/CD** — 双分支模型（`main` 稳定生产，`staging` 验证前沿），配置分离支持多平台（HF Staging / ModelScope Staging），新平台只需 +1 个 JSON 配置文件。 |
 | 🐳 | **单 Dockerfile 部署** — 运行于 Hugging Face Spaces 免费套餐。多阶段构建：上游 nanobot + 军团补丁在构建时合并打入。 |
+| ☁️ | **Cloud 原生模式** — 独立的极简部署层（`deploy/cloud/`），只需 `DEEPSEEK_API_KEY` 即可在 HF Space / ModelScope 启动单智能体，零 Squad 依赖。已贡献上游 PR [#4139](https://github.com/HKUDS/nanobot/pull/4139)。 |
 
 ## 分支模型
 
@@ -103,6 +104,51 @@ deploy/huggingface/
 | `patch_webui_squad_sessions.py` | `webui/src/` API 调用 | `/api/sessions` 重写为 `/api/squad/sessions?token=`（ModelScope 沙箱绕过） |
 | `patch_package_json_radix.py` | `webui/package.json` | 构建时注入 `@radix-ui/react-avatar` + `react-scroll-area` 依赖 ⭐ v0.2.0 新增 |
 
+## Cloud 部署层
+
+> 🆕 独立于 Squad 的单智能体部署模式——面向普通云平台用户，开箱即用。
+
+Cloud 层源自上游 PR [#4139](https://github.com/HKUDS/nanobot/pull/4139)，提供一种**极简部署方式**：
+
+| 特性 | Cloud 模式 | Squad 模式 |
+|------|:-----------:|:----------:|
+| Agent 数量 | 1 | 5+ |
+| 用户→Agent 路由 | ❌ 无需（平台层认证） | ✅ Gatekeeper OAuth + RBAC |
+| 所需配置 | `DEEPSEEK_API_KEY` 一个变量 | 完整 squad roster + token |
+| 适用场景 | 个人用户、HF Space 快速体验 | 团队协作、多角色指挥 |
+
+### 运行时流程
+
+```
+用户 HF 登录 → Space URL
+   │
+   ├─ HF nginx 验证登录态（Private Space）
+   │
+   └─ 转发到容器:7860
+        │
+        └─ nanobot gateway
+             ├─ gateway.port = 17860（健康检查，不对外暴露）
+             └─ channels.websocket.port = 7860（WebUI + WebSocket）
+```
+
+核心原则：**一个云空间 = 一个 agent = 一个用户**。平台层负责认证（HF OAuth / ModelScope OAuth），nanobot 层零认证逻辑——只要能到达容器就能对话。
+
+### 文件结构
+
+```
+deploy/cloud/
+├── Dockerfile.cloud          # cloud 模式 Docker 构建
+├── config.template.json      # 最小配置模板（仅 DEEPSEEK_API_KEY）
+├── entrypoint.sh             # cloud / squad 路由分叉
+├── platform_setup.py         # 平台探测入口
+└── platforms/
+    ├── base.py               # PlatformProtocol 抽象基类
+    ├── hf_spaces.py          # HF Spaces 平台
+    └── modelscope.py         # ModelScope 平台（含 OAuth 注册）
+```
+
+> Cloud 层的平台探测逻辑与 Squad 层共享同一 `platforms/` 架构，但 `entrypoint.sh` 通过 squad overlay 是否存在决定路由分叉，零耦合。
+
 ## 快速开始
 
 本仓库是上游 NanoBot 的 **部署层叠加**。`Dockerfile` 位于根目录，squad 组件位于 `deploy/huggingface/`。
@@ -122,10 +168,18 @@ MIT — 继承自[上游](https://github.com/HKUDS/nanobot/blob/nightly/LICENSE)
 
 - 上游项目：[HKUDS/nanobot](https://github.com/HKUDS/nanobot)
 - 上游 PR：[#3869](https://github.com/HKUDS/nanobot/pull/3869)（DeepSeek 消息清洗）· [#3908](https://github.com/HKUDS/nanobot/pull/3908)（WS peers_update 事件）· [#4134](https://github.com/HKUDS/nanobot/pull/4134)（WS 权限拒绝 error 事件）· [#4139](https://github.com/HKUDS/nanobot/pull/4139)（云平台部署层）
+- Fork Nightly（含 cloud 层）：[DreamShepherd2006/nanobot/nightly](https://github.com/DreamShepherd2006/nanobot/tree/nightly)
 - 上游 Discussion：[#3925](https://github.com/HKUDS/nanobot/discussions/3925)（单容器多智能体系统）
 - ModelScope 验证空间：[Stone2006/nanobot-multi-agent-nightly](https://www.modelscope.cn/studios/Stone2006/nanobot-multi-agent-nightly)
 
 ## 最近更新
+
+`fc2941c` — 2026-06-01
+
+- ☁️ **Cloud 部署层**（`deploy/cloud/`）：极简单智能体云部署，`DEEPSEEK_API_KEY` 即可启动
+- 🔀 `entrypoint.sh` 路由分叉：cloud / squad 零耦合切换
+- 🏗️ 平台探测 + 首次运行种子配置（`config.template.json` → `/data/config.json`）
+- 📝 README 新增 Cloud 部署层章节
 
 `dd22e46` — 2026-05-31
 
