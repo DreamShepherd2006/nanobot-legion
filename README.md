@@ -121,7 +121,7 @@ MIT — 继承自[上游](https://github.com/HKUDS/nanobot/blob/nightly/LICENSE)
 ## 相关链接
 
 - 上游项目：[HKUDS/nanobot](https://github.com/HKUDS/nanobot)
-- 上游 PR：[#3869](https://github.com/HKUDS/nanobot/pull/3869)（DeepSeek 消息清洗）· [#3908](https://github.com/HKUDS/nanobot/pull/3908)（WS peers_update 事件）· [#4134](https://github.com/HKUDS/nanobot/pull/4134)（WS 权限拒绝 error 事件）
+- 上游 PR：[#3869](https://github.com/HKUDS/nanobot/pull/3869)（DeepSeek 消息清洗）· [#3908](https://github.com/HKUDS/nanobot/pull/3908)（WS peers_update 事件）· [#4134](https://github.com/HKUDS/nanobot/pull/4134)（WS 权限拒绝 error 事件）· [#4139](https://github.com/HKUDS/nanobot/pull/4139)（云平台部署层）
 - 上游 Discussion：[#3925](https://github.com/HKUDS/nanobot/discussions/3925)（单容器多智能体系统）
 - ModelScope 验证空间：[Stone2006/nanobot-multi-agent-nightly](https://www.modelscope.cn/studios/Stone2006/nanobot-multi-agent-nightly)
 
