@@ -72,11 +72,8 @@ class HFSpacesPlatform(CloudPlatformProtocol):
 
         client_id = os.environ.get("OAUTH_CLIENT_ID", "")
         client_secret = os.environ.get("OAUTH_CLIENT_SECRET", "")
-        # Build redirect_uri from the request
-        try:
-            redirect_uri = str(request.url_for("auth")).replace("http://", "https://")
-        except Exception:
-            redirect_uri = ""
+        # Build redirect_uri from the callback URL (request itself, minus query string)
+        redirect_uri = str(request.url).split("?")[0].replace("http://", "https://")
 
         async with httpx.AsyncClient(timeout=15) as http:
             # Step 1 — exchange code for access token
