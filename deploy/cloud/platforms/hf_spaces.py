@@ -146,3 +146,26 @@ class HFSpacesPlatform(CloudPlatformProtocol):
             _log(f"env unfreeze failed: {exc}")
 
         return "\n".join(exports)
+
+    @staticmethod
+    async def fetch_userinfo(token_data: dict) -> dict | None:
+        """Fetch userinfo from HF OAuth endpoint."""
+        import httpx
+
+        access_token = token_data.get("access_token", "")
+        if not access_token:
+            return None
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    "https://huggingface.co/oauth/userinfo",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception as exc:
+            import sys
+
+            sys.stderr.write(f"[hf_spaces] fetch_userinfo error: {exc}\n")
+        return None
