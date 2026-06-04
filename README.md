@@ -1,212 +1,143 @@
 # Nanobot Legion
 
-将单智能体 [NanoBot](https://github.com/HKUDS/nanobot) 扩展为多智能体协同指挥系统的部署层，运行于 Hugging Face Spaces。
-
-**在线演示**：[军团指挥中心](https://huggingface.co/spaces/DreamShepherd2006/nanobot-multi-agent-nightly)（生产）· [HF Staging](https://huggingface.co/spaces/DreamShepherd2006/Nanobot-Staging)（验证）· [ModelScope Staging](https://www.modelscope.cn/studios/Stone2006/nanobot-multi-agent-nightly)（国内镜像）
+将单智能体 [NanoBot](https://github.com/HKUDS/nanobot) 扩展为多智能体协同指挥系统的部署层，运行于 Hugging Face Spaces / ModelScope Studio。
 
 > 🧪 跟踪 [NanoBot v0.2.0](https://github.com/HKUDS/nanobot/releases/tag/v0.2.0)（upstream/nightly [`92f2ff3a`](https://github.com/HKUDS/nanobot/commit/92f2ff3a)）
 
-> *"军团" — 一组各司其职的 AI 智能体，在统一指挥下协同作战。*
+## 仓库关系
 
-## 亮点
+```
+cloud-agent-gateway          ← pip 包：平台抽象、OAuth、中继
+        │
+        │ 依赖
+        ▼
+nanobot-legion (本仓库)      ← 部署层：Gatekeeper、Squad、补丁
+        │
+        │ 部署到
+        ▼
+  ┌─────────────────────────────────────────────────┐
+  │ HF Cloud Demo    HF Staging    MS Staging       │
+  │ (单智能体)       (验证)        (验证+国内)        │
+  └─────────────────────────────────────────────────┘
+```
 
-| 🎖️ | **多智能体协同** — 5 个专业智能体（Neo/Trinity/Sentinel/Assistant/Medic）通过 WebSocket 互联互通。指挥官可跨节点调度任务、查询状态、汇总结果。 |
-|-----|-----|
-| 🤖 | **自主运维** — Neo（军团指挥官）可自主完成上游版本适配验证：拉取最新代码 → 部署到 Staging → 检查构建/运行日志 → 验证通过后上报，无需人工介入。 |
-| 🔄 | **自愈机制** — `resurrect_neo.sh` V6 + Gatekeeper 健康监控：Neo 离线 > 150s 自动复活（跨平台路径 `$INSTANCE_ROOT`），冷却 300s。已通过 MS / HF Staging / HF Nightly 三平台实战验证。 |
-| 🛡️ | **OAuth + RBAC** — Hugging Face / ModelScope OAuth，三级权限：Commander（管理员）、Member（成员，可对话）、Guest（访客，只读）。 |
-| 🎨 | **动态 WebUI** — 实时智能体状态徽标（待命/执行中/阻塞/离线）、动态侧边栏编制、跨节点标签切换。全部由运行时环境变量驱动，零硬编码。 |
-| 🧪 | **多平台 CI/CD** — 双分支模型（`main` 稳定生产，`staging` 验证前沿），配置分离支持多平台（HF Staging / ModelScope Staging），新平台只需 +1 个 JSON 配置文件。 |
-| 🐳 | **单 Dockerfile 部署** — 运行于 Hugging Face Spaces 免费套餐。多阶段构建：上游 nanobot + 军团补丁在构建时合并打入。 |
-| ☁️ | **Cloud 原生模式** — 基于 [cloud-agent-gateway](https://github.com/DreamShepherd2006/cloud-agent-gateway) pip 包，只需 `DEEPSEEK_API_KEY` 即可在 HF Space / ModelScope 启动单智能体，零 Squad 依赖。 |
+- **[cloud-agent-gateway](https://github.com/DreamShepherd2006/cloud-agent-gateway)** — 框架无关的云部署层，提供 OAuth 回调、平台探测、HTTP 中继。nanobot-legion 通过 pip 依赖它。
+- **nanobot-legion** — 在此之上叠加 Squad 多智能体层（Gatekeeper、跨智能体 WebSocket 通信网、配置同步、复活守护）。
+- **上游客制** — 通过构建时 `sed` 补丁 + 运行时 Python 补丁注入，不改上游源码。
+
+## 在线空间
+
+| 空间 | 平台 | 定位 | 链接 |
+|------|------|------|------|
+| Nightly | HF Spaces | 🛡️ 生产 | [DreamShepherd2006/nanobot-multi-agent-nightly](https://huggingface.co/spaces/DreamShepherd2006/nanobot-multi-agent-nightly) |
+| HF Staging | HF Spaces | 🧪 验证 | [DreamShepherd2006/Nanobot-Staging](https://huggingface.co/spaces/DreamShepherd2006/Nanobot-Staging) |
+| MS Staging | ModelScope | 🧪 验证 + 国内镜像 | [Stone2006/nanobot-multi-agent-nightly](https://www.modelscope.cn/studios/Stone2006/nanobot-multi-agent-nightly) |
+| HF Cloud Demo | HF Spaces | ☁️ 单智能体快速体验 | [DreamShepherd2006/nanobot-cloud-demo](https://huggingface.co/spaces/DreamShepherd2006/nanobot-cloud-demo) |
 
 ## 分支模型
 
-| 分支 | 定位 | 平台 | 节奏 |
-|------|------|------|------|
-| `main` | 🛡️ 稳定生产（Nightly） | HF Space | 落后 staging，cherry-pick 已验证的变更 |
-| `staging` | 🧪 验证前沿 | HF Staging + MS Staging + 未来平台 | 跟踪上游 nightly，日常迭代 |
+| 分支 | 定位 | 部署到 | 节奏 |
+|------|------|--------|------|
+| `main` | 🛡️ 稳定生产 | HF Nightly | cherry-pick 已验证变更 |
+| `staging` | 🧪 验证前沿 | HF Staging + MS Staging | 跟踪上游 nightly，日常迭代 |
 
-> 配置分离：同一 `staging` 分支承载多个平台，通过 `squad_config.{platform}.json` 区分，`entrypoint.sh` 启动时自动选配。
+> 同一 `staging` 分支承载多平台，通过 `squad_config.{platform}.json` 区分，启动时自动选配。共享代码（gatekeeper、补丁、bridge）在 `staging` 开发，稳定后 cherry-pick 到 `main`。
+
+## 架构
+
+```
+                浏览器
+                  │
+        ┌─────────▼──────────┐
+        │    Gatekeeper       │  OAuth 认证 (HF / ModelScope)
+        │  (FastAPI + WS)     │  三级 RBAC (Commander / Member / Guest)
+        │                    │  HTTP Relay (跨智能体中继)
+        └──┬──────┬──────┬───┘
+           │      │      │
+       Neo(A)  Trinity  Sentinel  Medic  Assistant
+           │
+    ┌──────┴──────┐
+    │ squad_bridge │  WebSocket 通信网
+    │ config_sync  │  实例配置动态同步
+    │ resurrect    │  健康监控 + 自动复活
+    └─────────────┘
+
+    Neo ──▶ Staging 验证空间 ──▶ 自动部署、日志检查、结果上报
+```
+
+> Neo 作为军团指挥官，可自主拉取上游代码 → 部署到 Staging → 检查构建/运行日志 → 验证通过后报告。Staging 四空间已通过实战验证。
+
+## 核心组件
+
+| 组件 | 职责 |
+|------|------|
+| `gatekeeper.py` | OAuth 网关、三级 RBAC、HTTP/WS 代理、跨空间 relay、保活守护 |
+| `squad_bridge.py` | 智能体间 WebSocket 消息通信网 |
+| `squad_bridge_cross.py` | 跨空间 relay（Staging → Nightly）、调用方白名单 + 远程 token 认证 |
+| `squad_config_sync.py` | 实例配置同步——新 agent 从模板创建，已有 agent 仅更新动态端口与白名单 |
+| `push_tasks.py` | 任务进度推送——结构化 JSON `task_update` 事件，前端实时展示 |
+| `platform_setup.py` | 启动时平台探测 + 自动选配 |
+| `squad_config_loader.py` | 从 JSON 配置注入运行时环境变量 |
+| `entrypoint.sh` | 容器入口：平台检测 → 选配 → 实例模板下发 → 补丁注入 → 保活启动 |
+| `resurrect_neo.sh` | Neo 离线 > 150s 自动复活（跨平台路径 `$INSTANCE_ROOT`），冷却 300s |
 
 ### 多平台配置
 
 ```
 deploy/huggingface/
-├── squad_config.json                  ← 兜底
-├── squad_config.hf-staging.json       ← HF Staging: /data, hf-staging
-├── squad_config.ms-staging.json       ← MS Staging: /mnt/workspace, modelscope
-└── squad_config.{new-platform}.json   ← 扩展新平台只需创建此文件
+├── squad_config.json                  ← 兜底 (HF Nightly)
+├── squad_config.hf-staging.json       ← HF Staging
+├── squad_config.ms-staging.json       ← ModelScope Staging
+└── squad_config.{platform}.json       ← 新平台只需 +1 文件
 ```
 
-| 平台 | 检测条件 | 配置 | 部署目标 |
-|------|---------|------|---------|
-| HF Staging | `SPACE_ID` 含 `NanobotStaging` | `squad_config.hf-staging.json` | `DreamShepherd2006/Nanobot-Staging` |
-| ModelScope | `MODELSCOPE_ENVIRONMENT=studio` | `squad_config.ms-staging.json` | `Stone2006/nanobot-multi-agent-nightly` |
-| HF Nightly (main 分支) | `SPACE_ID` 含 `multi-agent-nightly` | `squad_config.json` | `DreamShepherd2006/nanobot-multi-agent-nightly` |
+## 补丁
 
-> 共享代码（gatekeeper / squad_bridge / platforms / 补丁）在 `staging` 上开发，稳定后 cherry-pick 到 `main`。平台差异仅存在于 `squad_config.{platform}.json`。
-
-## 架构
-
-```
-                      ┌───────────────────────────────────────┐
-                      │       Nightly (HF Space 生产)         │
-                      │                                       │
-                      │  Gatekeeper (FastAPI/WS 代理)         │
-                      │   ├─ OAuth / 权限控制                 │
-                      │   ├─ HTTP Relay (跨智能体中继)        │
-   浏览器 ──── WebUI ─▶│   └─ WebSocket 代理                  │
-                      │        │        │        │            │
-                      │     Neo(A)  Trinity  Sentinel  ...    │
-                      │   ┌──────────────────────────────┐    │
-                      │   │  squad_bridge (WS 通信网)    │    │
-                      │   │  squad_config_sync (配置)    │    │
-                      │   └──────────────────────────────┘    │
-                      │                                       │
-                      │  Neo ──▶ HF Staging ──▶ MS Staging    │
-                      │          (多平台编排验证)              │
-                      └───────────────────────────────────────┘
-
-             nanobot-legion (部署仓库)
-             ├── main     → Nightly 稳定生产
-             └── staging  → 多平台验证 (HF + MS + …)
-```
-> Neo 作为军团指挥官，可自主拉取上游最新代码 → 部署到 Staging 空间 → 检查构建/运行日志 → 验证通过后报告，实现一线式版本适配验证。
-
-## 组件
-
-| 文件 | 功能 | 分支 |
-|------|------|------|
-| `gatekeeper.py` | OAuth 网关（HF + ModelScope），三级权限控制，HTTP/WS 代理，跨智能体中继，保活守护 | 共用 |
-| `squad_bridge.py` | 智能体之间 WebSocket 消息通信网 | 共用 |
-| `squad_bridge_cross.py` | 跨空间 relay（Staging → Nightly），本地调用方白名单 + 远程 token 认证 | `staging` |
-| `squad_config_sync.py` | 实例配置动态同步。新 agent 从模板创建，已有 agent 仅同步动态端口与白名单。修改前自动备份，保留最近 3 份。 | 共用 |
-| `push_tasks.py` | 任务进度推送：结构化 JSON `task_update` 事件注入 gatekeeper，前端 LegionTerminal 实时展示 | `staging` |
-| `platforms/` | 平台抽象层：`base.py`（Protocol）+ `hf_staging.py` + `hf_direct.py` + `modelscope.py`，零平台分支的主代码 | `staging` |
-| `squad_config_loader.py` | 配置加载器：从 `squad_config.json` 读取并注入 `DEPLOY_PLATFORM`、`data_root` 等环境变量 | `staging` |
-| `platform_setup.py` | 平台探测入口：导入 `platforms/` → 调用 `setup()` → 运行时环境配置 | `staging` |
-| `squad_config.{platform}.json` | 平台专属配置（数据根、端口、权限）。`main` 用单一 `squad_config.json`。 | `staging` |
-| `Dockerfile` | 多阶段构建，合并上游 nanobot + 军团部署层 + 补丁打入。支持 `.[matrix]` extras 安装 Matrix 通道依赖。 | 共用 |
-| `entrypoint.sh` | 运行时初始化：平台检测 → 自动选配 → 实例模板下发 → workspace 知识注入 → 补丁注入 → 保活 | 共用 |
-
-### 补丁
-
-**v0.2.0 适配补丁：**
+构建时通过 Python 脚本注入，不改上游源码。v0.2.0 共 7 个活跃补丁：
 
 | 补丁 | 目标 | 作用 |
 |------|------|------|
-| `patch_legion_v6_sidebar.py` | `webui/src/components/Sidebar.tsx` | 注入 LegionRoster + LegionTerminal 组件（动态编制、状态徽标、任务追踪面板） |
-| `patch_legion_v4_client.py` | `webui/src/NanobotClient.tsx` | 注入 onAnyEvent 拦截器（`legion_update` / `cluster_log` / `task_update` 事件路由） |
-| `patch_message_hardening.py` | `nanobot/providers/openai_compat_provider.py` | DeepSeek 消息内容清洗（移除 "(empty)" 占位符，保留 tool_calls 下的文本） |
-| `patch_squad_error_events.py` | `nanobot/channels/websocket.py` | 为 squad bridge 提供结构化 error 事件（双目标：`/app/` + `site-packages/`） |
-| `patch_gatekeeper_identity.py` | `nanobot/channels/manager.py` | 注入 OAuth 身份（`sender_id` / `sender_name`）到 relay 消息，跨空间身份透传 |
-| `patch_webui_squad_sessions.py` | `webui/src/` API 调用 | `/api/sessions` 重写为 `/api/squad/sessions?token=`（ModelScope 沙箱绕过） |
-| `patch_package_json_radix.py` | `webui/package.json` | 构建时注入 `@radix-ui/react-avatar` + `react-scroll-area` 依赖 ⭐ v0.2.0 新增 |
+| `patch_legion_v6_sidebar.py` | `webui/src/components/Sidebar.tsx` | 动态编制、状态徽标、LegionTerminal 任务面板 |
+| `patch_legion_v4_client.py` | `webui/src/NanobotClient.tsx` | `onAnyEvent` 拦截器（legion_update / task_update 事件路由） |
+| `patch_message_hardening.py` | `nanobot/providers/openai_compat_provider.py` | DeepSeek 消息清洗（移除空占位符） |
+| `patch_squad_error_events.py` | `nanobot/channels/websocket.py` | 结构化 error 事件（双目标：/app + site-packages） |
+| `patch_gatekeeper_identity.py` | `nanobot/channels/manager.py` | OAuth 身份透传（sender_id/name 注入 relay 消息） |
+| `patch_webui_squad_sessions.py` | `webui/src/` API 调用 | `/api/sessions` → `/api/squad/sessions?token=` (ModelScope 路由绕过) |
+| `patch_package_json_radix.py` | `webui/package.json` | 构建时注入 radix-ui 依赖 |
 
-## Cloud 部署层
-
-> 🆕 独立于 Squad 的单智能体部署模式——面向普通云平台用户，开箱即用。
-
-Cloud 层基于 [cloud-agent-gateway](https://github.com/DreamShepherd2006/cloud-agent-gateway) pip 包，提供一种**极简部署方式**：
-
-| 特性 | Cloud 模式 | Squad 模式 |
-|------|:-----------:|:----------:|
-| Agent 数量 | 1 | 5+ |
-| 用户→Agent 路由 | ❌ 无需（平台层认证） | ✅ Gatekeeper OAuth + RBAC |
-| 所需配置 | `DEEPSEEK_API_KEY` 一个变量 | 完整 squad roster + token |
-| 适用场景 | 个人用户、HF Space 快速体验 | 团队协作、多角色指挥 |
-
-### 运行时流程
-
-```
-用户 HF 登录 → Space URL
-   │
-   ├─ HF nginx 验证登录态（Private Space）
-   │
-   └─ 转发到容器:7860
-        │
-        └─ nanobot gateway
-             ├─ gateway.port = 17860（健康检查，不对外暴露）
-             └─ channels.websocket.port = 7860（WebUI + WebSocket）
-```
-
-核心原则：**一个云空间 = 一个 agent = 一个用户**。平台层负责认证（HF OAuth / ModelScope OAuth），nanobot 层零认证逻辑——只要能到达容器就能对话。
-
-### 文件结构
-
-```
-deploy/cloud/
-├── Dockerfile.cloud          # cloud 模式 Docker 构建
-├── config.template.json      # 最小配置模板（仅 DEEPSEEK_API_KEY）
-├── entrypoint.sh             # cloud / squad 路由分叉
-├── platform_setup.py         # 平台探测入口
-└── platforms/
-    ├── base.py               # PlatformProtocol 抽象基类
-    ├── hf_spaces.py          # HF Spaces 平台
-    └── modelscope.py         # ModelScope 平台（含 OAuth 注册）
-```
-
-> Cloud 层的平台探测逻辑与 Squad 层共享同一 `platforms/` 架构，但 `entrypoint.sh` 通过 squad overlay 是否存在决定路由分叉，零耦合。
-
-## 快速开始
-
-本仓库是上游 NanoBot 的 **部署层叠加**。`Dockerfile` 位于根目录，squad 组件位于 `deploy/huggingface/`。
+## 部署
 
 ```bash
+# 本仓库是部署层，叠加在上游 NanoBot 之上
 git clone https://github.com/HKUDS/nanobot.git
 cd nanobot
-git clone https://github.com/DreamShepherd2006/nanobot-legion.git deploy/huggingface
-# Dockerfile 在 deploy/huggingface/Dockerfile — 复制到项目根目录或挂载为构建上下文
+git clone https://github.com/DreamShepherd2006/nanobot-legion.git legion-overlay
+
+# Dockerfile 位于 legion-overlay/Dockerfile
+# cloud-agent-gateway 通过 pip 自动安装
 ```
+
+Docker 多阶段构建流程：
+
+```
+上游 nanobot 源码
+    │
+    ├─ sed 内核补丁 (WebSocket 鉴权、0.0.0.0 绑定)
+    ├─ Python WebUI 补丁 (Sidebar、Client、Sessions)
+    ├─ pip install cloud-agent-gateway
+    ├─ npm build
+    ├─ Python 运行时补丁 (message hardening、error events、identity)
+    └─ 实例种子 + squad 脚本 → 最终镜像
+```
+
+## 相关链接
+
+- 上游：[HKUDS/nanobot](https://github.com/HKUDS/nanobot)
+- 云层：[cloud-agent-gateway](https://github.com/DreamShepherd2006/cloud-agent-gateway)（pip 包 — 平台抽象、OAuth、中继）
+- Fork：[DreamShepherd2006/nanobot](https://github.com/DreamShepherd2006/nanobot/tree/nightly)
+- 上游 PR：[#3869](https://github.com/HKUDS/nanobot/pull/3869)（DeepSeek 消息清洗）· [#3908](https://github.com/HKUDS/nanobot/pull/3908)（WS peers_update）· [#4139](https://github.com/HKUDS/nanobot/pull/4139)（WS target_chat_id 会话恢复）· [#4134](https://github.com/HKUDS/nanobot/pull/4134)（WS 权限错误事件 — 已关）
+- 讨论：[#3925](https://github.com/HKUDS/nanobot/discussions/3925)（单容器多智能体）
 
 ## 许可
 
 MIT — 继承自[上游](https://github.com/HKUDS/nanobot/blob/nightly/LICENSE)。
-
-## 相关链接
-
-- 上游项目：[HKUDS/nanobot](https://github.com/HKUDS/nanobot)
-- 独立项目：[cloud-agent-gateway](https://github.com/DreamShepherd2006/cloud-agent-gateway)（pip 包 — 平台抽象、OAuth、中继）
-- 上游 PR：[#3869](https://github.com/HKUDS/nanobot/pull/3869)（DeepSeek 消息清洗）· [#3908](https://github.com/HKUDS/nanobot/pull/3908)（WS peers_update 事件）· [#4139](https://github.com/HKUDS/nanobot/pull/4139)（WS target_chat_id 会话恢复）· [#4134](https://github.com/HKUDS/nanobot/pull/4134)（WS 权限错误事件 — 已关，确认 token 是唯一安全边界）
-- Fork Nightly（含 cloud 层）：[DreamShepherd2006/nanobot/nightly](https://github.com/DreamShepherd2006/nanobot/tree/nightly)
-- 上游 Discussion：[#3925](https://github.com/HKUDS/nanobot/discussions/3925)（单容器多智能体系统）
-- ModelScope 验证空间：[Stone2006/nanobot-multi-agent-nightly](https://www.modelscope.cn/studios/Stone2006/nanobot-multi-agent-nightly)
-
-## 最近更新
-
-`fc2941c` — 2026-06-01
-
-- ☁️ **Cloud 部署层**（`deploy/cloud/`）：极简单智能体云部署，`DEEPSEEK_API_KEY` 即可启动
-- 🔀 `entrypoint.sh` 路由分叉：cloud / squad 零耦合切换
-- 🏗️ 平台探测 + 首次运行种子配置（`config.template.json` → `/data/config.json`）
-- 📝 README 新增 Cloud 部署层章节
-
-`dd22e46` — 2026-05-31
-
-- 🩹 **复活机制全面修复**：`squad_config_sync` 根级 `allowed_env_keys` 清理（5/30 Pydantic 复活失败根因）
-- 🔄 `resurrect_neo.sh` V5→V6：跨平台路径 `$INSTANCE_ROOT`（原 `$HOME/.nanobot` 在 MS 不存在）
-- 🔧 `gatekeeper.py`：复活脚本路径改用 `platform.instance_path()` 动态解析
-- 🧪 **三平台复活实战验证通过**（MS / HF Staging / HF Nightly）
-- 🌐 `squad_bridge_cross.py` v2：跨空间 relay + 调用方白名单
-
-`80d2329` — 2026-05-29
-
-- 🏗️ 双分支 + 配置分离：`staging` 分支承载 HF Staging / MS Staging 双平台，通过 `squad_config.{platform}.json` 区分
-- 📋 entrypoint 启动时自动检测平台 → 选配正确的 `squad_config.json`
-- 📦 platforms/ 抽象层 + squad_config_loader 补全至 Dockerfile
-- 🧹 同步 MS 与 HF Staging 部署代码（manual OAuth, stderr logging）
-
-`0f449cc` — 2026-05-26
-
-- 🧹 移除 `patch_bootstrap_peers.py`（死代码，上游已原生支持）
-- 🐛 修复 TS6133：v6 sidebar 补丁移除未使用的 `useCallback`/`useRef` import
-- 📝 补丁表精简至 4 个活跃补丁
-
-`44fb9bd` — 2026-05-26
-
-- 上游追踪: `nanobot v0.2.0` (commit `92f2ff3a`)
-- gatekeeper: ModelScope OAuth 解析修复、GRACE_SECONDS 150、`import subprocess`
-- entrypoint: neo workspace 知识注入 + 运行时补丁注入
-- patch_legion_v6_sidebar: 完整 LegionTerminal 组件
-- patch_squad_error_events: 双目标补丁 + 备份
