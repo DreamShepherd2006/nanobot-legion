@@ -68,8 +68,7 @@ COPY deploy/huggingface/NANOBOT_COMMIT /app/NANOBOT_COMMIT
 # ── 9. Legion: extra Python dependencies ────────────────────
 RUN uv pip install --system --no-cache \
     fastapi uvicorn websockets authlib httpx itsdangerous tomli \
-    huggingface_hub joserfc websocket-client \
-    git+https://github.com/DreamShepherd2006/cloud-agent-gateway.git
+    huggingface_hub joserfc websocket-client
 
 # ── 10. Legion: minimal instance seed (storage罐优先，此仅首次兜底) ─
 RUN mkdir -p /app/instances/_template /app/instances/neo-workspace/memory && \
@@ -92,6 +91,12 @@ COPY deploy/huggingface/platform_setup.py ./platform_setup.py
 COPY deploy/huggingface/platforms/ ./platforms/
 COPY deploy/huggingface/scripts/resurrect_neo.sh /app/scripts/resurrect_neo.sh
 
+# ── 11b. Legion: cloud platform layer ───────────────────────
+COPY deploy/cloud/platform_setup.py /app/deploy/cloud/platform_setup.py
+COPY deploy/cloud/platforms/ /app/deploy/cloud/platforms/
+COPY deploy/cloud/entrypoint.sh /app/deploy/cloud/entrypoint.sh
+RUN sed -i 's/\r$//' /app/deploy/cloud/entrypoint.sh && chmod +x /app/deploy/cloud/entrypoint.sh
+
 # ── 12. User & permissions ─────────────────────────────────
 RUN useradd -m -u 1000 -s /bin/bash nanobot && \
     mkdir -p /home/nanobot/.nanobot && \
@@ -101,9 +106,7 @@ RUN useradd -m -u 1000 -s /bin/bash nanobot && \
 # ── 13. Entrypoint ──────────────────────────────────────────
 # Cloud entrypoint (router) → delegates to squad launch.sh
 COPY deploy/huggingface/launch.sh /app/deploy/huggingface/launch.sh
-COPY deploy/entrypoint.sh /app/deploy/entrypoint.sh
-RUN sed -i 's/\r$//' /app/deploy/huggingface/launch.sh && chmod +x /app/deploy/huggingface/launch.sh && \
-    sed -i 's/\r$//' /app/deploy/entrypoint.sh && chmod +x /app/deploy/entrypoint.sh
+RUN sed -i 's/\r$//' /app/deploy/huggingface/launch.sh && chmod +x /app/deploy/huggingface/launch.sh
 
 USER nanobot
 ENV HOME=/home/nanobot \
@@ -111,4 +114,4 @@ ENV HOME=/home/nanobot \
 
 EXPOSE 7860
 
-ENTRYPOINT ["/app/deploy/entrypoint.sh"]
+ENTRYPOINT ["/app/deploy/cloud/entrypoint.sh"]
