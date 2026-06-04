@@ -7,25 +7,23 @@
 ## 仓库关系
 
 ```
-                    ┌─ HF Cloud Demo (HF) ──────┐
-cloud-agent-gateway ┤                            ├─ 单智能体，纯平台层
-(pip 包)            └─ MS Cloud Demo (MS) ───────┘
-        │
-        │ pip install
-        ▼
-nanobot-legion                      ← Squad 多智能体部署层
-(本仓库)
-        │
-        │ 部署到
-        ▼
-  ┌─────────────────────────────────────────────────┐
-  │ Nightly (HF)     HF Staging      MS Staging     │
-  │ 🛡️ 生产          🧪 验证          🧪 验证+国内    │
-  └─────────────────────────────────────────────────┘
+cloud-agent-gateway                          ← 框架底层 (pip 包)
+  │ 平台探测 · OAuth 回调 · HTTP Relay
+  │
+  ├── 直接使用 ──→  HF Cloud Demo  (HF)  ───┐
+  │                 MS Cloud Demo  (MS)      │  单智能体快速体验
+  │                                          │  (纯框架底层，透传)
+  │
+  └── pip 依赖 ──→  nanobot-legion (本仓库)  ← 应用部署层
+                      │
+                      │ 部署到 ──→  Nightly     (HF)  🛡️ 生产
+                      │            HF Staging  (HF)  🧪 验证
+                      └───────→   MS Staging  (MS)  🧪 验证+国内
 ```
 
-- **[cloud-agent-gateway](https://github.com/DreamShepherd2006/cloud-agent-gateway)** — 框架无关的云部署层，提供 OAuth 回调、平台探测、HTTP 中继。Cloud Demo 空间直接使用它；nanobot-legion 通过 `pip install` 依赖它。
-- **nanobot-legion (本仓库)** — 在 cloud-agent-gateway 之上叠加 Squad 多智能体层（Gatekeeper、跨智能体 WebSocket 通信网、配置同步、复活守护）。部署到 Nightly + 两个 Staging 空间。
+- **[cloud-agent-gateway](https://github.com/DreamShepherd2006/cloud-agent-gateway)** — 框架底层。平台探测、OAuth 回调、HTTP Relay 中继，框架无关，任何 agent 都可复用。
+- **nanobot-legion (本仓库)** — 应用部署层。基于 cloud-agent-gateway 构建完整的 Squad 多智能体指挥系统：Gatekeeper 网关、三级 RBAC、跨智能体 WebSocket 通信网、配置同步、复活守护。
+- **Cloud Demo 空间** — cloud-agent-gateway 的直接应用：平台层 + 上游原生 nanobot，零定制，快速体验。
 - **上游客制** — 通过构建时 `sed` 补丁 + 运行时 Python 补丁注入，不改上游源码。
 
 ## 在线空间
@@ -54,29 +52,43 @@ nanobot-legion                      ← Squad 多智能体部署层
 ## 架构
 
 ```
-                         浏览器
-                           │
-              ┌────────────▼─────────────┐
-              │       Gatekeeper          │
-              │  OAuth · RBAC · Relay     │
-              │  cloud-agent-gateway      │
-              └────┬──────┬──────┬────────┘
-                   │      │      │
-              ┌────▼──┐ ┌─▼──┐ ┌─▼────────┐
-              │  Neo   │ │ …… │ │  ……      │ 多智能体 Squad
-              │(Commander)│    │           │
-              └───┬────┘ └────┘ └──────────┘
-                  │
-         ┌────────┼────────┐
-         ▼        ▼        ▼
-    HF Staging  MS Staging  (已通过实战验证)
+┌──────────────────────────────────────────────────────────┐
+│                      应用部署层                            │
+│                   nanobot-legion                          │
+│                                                          │
+│   ┌───────────────────────────────────────────────────┐  │
+│   │                   Gatekeeper                        │  │
+│   │   OAuth 认证  ·  三级 RBAC  ·  HTTP Relay          │  │
+│   └───┬──────────────┬──────────────┬─────────────────┘  │
+│       │              │              │                     │
+│   ┌───▼────┐   ┌─────▼───┐   ┌─────▼──────┐              │
+│   │  Neo   │   │   …     │   │    …       │   Squad      │
+│   │Commander│  │         │   │            │   多智能体     │
+│   └───┬────┘   └─────────┘   └────────────┘              │
+│       │                                                   │
+│   ┌───┴──────────────────────────────────────────────┐   │
+│   │  squad_bridge · config_sync · resurrect          │   │
+│   └──────────────────────────────────────────────────┘   │
+│                                                          │
+│   ─────── 部署到 ───────▶  Nightly  ·  HF Staging  ·  MS Staging  │
+└──────────────────────────────────────────────────────────┘
+                              ▲ pip install
+┌──────────────────────────────────────────────────────────┐
+│                      框架底层                              │
+│               cloud-agent-gateway (pip)                   │
+│                                                          │
+│  平台探测 (HF Spaces / ModelScope / 直连)                  │
+│  OAuth 回调 · 环境变量注入 · HTTP Relay 中继               │
+│                                                          │
+│   ─────── 直接使用 ──────▶  HF Cloud Demo · MS Cloud Demo │
+└──────────────────────────────────────────────────────────┘
 ```
 
-| 层 | 职责 |
-|----|------|
-| platform（cloud-agent-gateway） | 平台探测、OAuth 回调、HTTP Relay 中继 → 任何 agent 框架都可用 |
-| squad（nanobot-legion） | Gatekeeper 多智能体网关、RBAC 三级权限、跨智能体 WebSocket 通信网、配置同步、复活守护 |
-| agent（upstream nanobot） | 原生单智能体，零定制 |
+| 层 | 做什么 | 怎么用 |
+|----|--------|--------|
+| **应用部署层** (nanobot-legion) | Squad 多智能体指挥系统完整部署 | 覆盖 Nightly + HF Staging + MS Staging 三空间 |
+| **框架底层** (cloud-agent-gateway) | 平台抽象 + OAuth + Relay | pip 安装。Squad 空间依赖它；Cloud Demo 直接用它 |
+| **单智能体** (upstream nanobot) | 原生 agent，零定制 | 上游代码 + cloud-agent-gateway = Cloud Demo 快速体验 |
 
 ## 核心组件
 
