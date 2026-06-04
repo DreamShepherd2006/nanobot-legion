@@ -33,6 +33,7 @@ nanobot-legion (本仓库)      ← 部署层：Gatekeeper、Squad、补丁
 | HF Staging | HF Spaces | 🧪 验证 | [DreamShepherd2006/Nanobot-Staging](https://huggingface.co/spaces/DreamShepherd2006/Nanobot-Staging) |
 | MS Staging | ModelScope | 🧪 验证 + 国内镜像 | [Stone2006/nanobot-multi-agent-nightly](https://www.modelscope.cn/studios/Stone2006/nanobot-multi-agent-nightly) |
 | HF Cloud Demo | HF Spaces | ☁️ 单智能体快速体验 | [DreamShepherd2006/nanobot-cloud-demo](https://huggingface.co/spaces/DreamShepherd2006/nanobot-cloud-demo) |
+| MS Cloud Demo | ModelScope | ☁️ 单智能体快速体验 | [DreamShepherd/ms-nanobot-cloud-demo](https://www.modelscope.cn/studios/DreamShepherd/ms-nanobot-cloud-demo) |
 
 ## 分支模型
 
