@@ -1095,6 +1095,10 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     # ── Wire routes ───────────────────────────────────────────
+    # ── Channel binding (WeChat QR / DingTalk) ──
+    from channel_binding import router as bind_router
+    _app.include_router(bind_router)
+
     _app.get("/health")(gk._handle_health)
     _app.post("/api/squad/relay")(gk._handle_relay)
     _app.post("/api/squad/tasks")(gk._handle_tasks_post)
