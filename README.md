@@ -18,7 +18,7 @@
 | 🎨 | **动态 WebUI** — 实时智能体状态徽标（待命/执行中/阻塞/离线）、动态侧边栏编制、跨节点标签切换。全部由运行时环境变量驱动，零硬编码。 |
 | 🧪 | **多平台 CI/CD** — 双分支模型（`main` 稳定生产，`staging` 验证前沿），配置分离支持多平台（HF Staging / ModelScope Staging），新平台只需 +1 个 JSON 配置文件。 |
 | 🐳 | **单 Dockerfile 部署** — 运行于 Hugging Face Spaces 免费套餐。多阶段构建：上游 nanobot + 军团补丁在构建时合并打入。 |
-| ☁️ | **Cloud 原生模式** — 独立的极简部署层（`deploy/cloud/`），只需 `DEEPSEEK_API_KEY` 即可在 HF Space / ModelScope 启动单智能体，零 Squad 依赖。已贡献上游 PR [#4139](https://github.com/HKUDS/nanobot/pull/4139)。 |
+| ☁️ | **Cloud 原生模式** — 基于 [cloud-agent-gateway](https://github.com/DreamShepherd2006/cloud-agent-gateway) pip 包，只需 `DEEPSEEK_API_KEY` 即可在 HF Space / ModelScope 启动单智能体，零 Squad 依赖。 |
 
 ## 分支模型
 
@@ -108,7 +108,7 @@ deploy/huggingface/
 
 > 🆕 独立于 Squad 的单智能体部署模式——面向普通云平台用户，开箱即用。
 
-Cloud 层源自上游 PR [#4139](https://github.com/HKUDS/nanobot/pull/4139)，提供一种**极简部署方式**：
+Cloud 层基于 [cloud-agent-gateway](https://github.com/DreamShepherd2006/cloud-agent-gateway) pip 包，提供一种**极简部署方式**：
 
 | 特性 | Cloud 模式 | Squad 模式 |
 |------|:-----------:|:----------:|
@@ -167,7 +167,8 @@ MIT — 继承自[上游](https://github.com/HKUDS/nanobot/blob/nightly/LICENSE)
 ## 相关链接
 
 - 上游项目：[HKUDS/nanobot](https://github.com/HKUDS/nanobot)
-- 上游 PR：[#3869](https://github.com/HKUDS/nanobot/pull/3869)（DeepSeek 消息清洗）· [#3908](https://github.com/HKUDS/nanobot/pull/3908)（WS peers_update 事件）· [#4134](https://github.com/HKUDS/nanobot/pull/4134)（WS 权限拒绝 error 事件）· [#4139](https://github.com/HKUDS/nanobot/pull/4139)（云平台部署层）
+- 独立项目：[cloud-agent-gateway](https://github.com/DreamShepherd2006/cloud-agent-gateway)（pip 包 — 平台抽象、OAuth、中继）
+- 上游 PR：[#3869](https://github.com/HKUDS/nanobot/pull/3869)（DeepSeek 消息清洗）· [#3908](https://github.com/HKUDS/nanobot/pull/3908)（WS peers_update 事件）· [#4139](https://github.com/HKUDS/nanobot/pull/4139)（WS target_chat_id 会话恢复）· [#4134](https://github.com/HKUDS/nanobot/pull/4134)（WS 权限错误事件 — 已关，确认 token 是唯一安全边界）
 - Fork Nightly（含 cloud 层）：[DreamShepherd2006/nanobot/nightly](https://github.com/DreamShepherd2006/nanobot/tree/nightly)
 - 上游 Discussion：[#3925](https://github.com/HKUDS/nanobot/discussions/3925)（单容器多智能体系统）
 - ModelScope 验证空间：[Stone2006/nanobot-multi-agent-nightly](https://www.modelscope.cn/studios/Stone2006/nanobot-multi-agent-nightly)
