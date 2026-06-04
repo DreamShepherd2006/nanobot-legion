@@ -7,22 +7,25 @@
 ## 仓库关系
 
 ```
-cloud-agent-gateway          ← pip 包：平台抽象、OAuth、中继
+                    ┌─ HF Cloud Demo (HF) ──────┐
+cloud-agent-gateway ┤                            ├─ 单智能体，纯平台层
+(pip 包)            └─ MS Cloud Demo (MS) ───────┘
         │
-        │ 依赖
+        │ pip install
         ▼
-nanobot-legion (本仓库)      ← 部署层：Gatekeeper、Squad、补丁
+nanobot-legion                      ← Squad 多智能体部署层
+(本仓库)
         │
         │ 部署到
         ▼
   ┌─────────────────────────────────────────────────┐
-  │ HF Cloud Demo    HF Staging    MS Staging       │
-  │ (单智能体)       (验证)        (验证+国内)        │
+  │ Nightly (HF)     HF Staging      MS Staging     │
+  │ 🛡️ 生产          🧪 验证          🧪 验证+国内    │
   └─────────────────────────────────────────────────┘
 ```
 
-- **[cloud-agent-gateway](https://github.com/DreamShepherd2006/cloud-agent-gateway)** — 框架无关的云部署层，提供 OAuth 回调、平台探测、HTTP 中继。nanobot-legion 通过 pip 依赖它。
-- **nanobot-legion** — 在此之上叠加 Squad 多智能体层（Gatekeeper、跨智能体 WebSocket 通信网、配置同步、复活守护）。
+- **[cloud-agent-gateway](https://github.com/DreamShepherd2006/cloud-agent-gateway)** — 框架无关的云部署层，提供 OAuth 回调、平台探测、HTTP 中继。Cloud Demo 空间直接使用它；nanobot-legion 通过 `pip install` 依赖它。
+- **nanobot-legion (本仓库)** — 在 cloud-agent-gateway 之上叠加 Squad 多智能体层（Gatekeeper、跨智能体 WebSocket 通信网、配置同步、复活守护）。部署到 Nightly + 两个 Staging 空间。
 - **上游客制** — 通过构建时 `sed` 补丁 + 运行时 Python 补丁注入，不改上游源码。
 
 ## 在线空间
@@ -37,36 +40,43 @@ nanobot-legion (本仓库)      ← 部署层：Gatekeeper、Squad、补丁
 
 ## 分支模型
 
+本仓库两个分支，对应 Squad 空间的部署：
+
 | 分支 | 定位 | 部署到 | 节奏 |
 |------|------|--------|------|
 | `main` | 🛡️ 稳定生产 | HF Nightly | cherry-pick 已验证变更 |
 | `staging` | 🧪 验证前沿 | HF Staging + MS Staging | 跟踪上游 nightly，日常迭代 |
 
 > 同一 `staging` 分支承载多平台，通过 `squad_config.{platform}.json` 区分，启动时自动选配。共享代码（gatekeeper、补丁、bridge）在 `staging` 开发，稳定后 cherry-pick 到 `main`。
+>
+> Cloud Demo 空间（HF / MS）不使用本仓库分支——它们由 [cloud-agent-gateway](https://github.com/DreamShepherd2006/cloud-agent-gateway) 独立部署。
 
 ## 架构
 
 ```
-                浏览器
+                         浏览器
+                           │
+              ┌────────────▼─────────────┐
+              │       Gatekeeper          │
+              │  OAuth · RBAC · Relay     │
+              │  cloud-agent-gateway      │
+              └────┬──────┬──────┬────────┘
+                   │      │      │
+              ┌────▼──┐ ┌─▼──┐ ┌─▼────────┐
+              │  Neo   │ │ …… │ │  ……      │ 多智能体 Squad
+              │(Commander)│    │           │
+              └───┬────┘ └────┘ └──────────┘
                   │
-        ┌─────────▼──────────┐
-        │    Gatekeeper       │  OAuth 认证 (HF / ModelScope)
-        │  (FastAPI + WS)     │  三级 RBAC (Commander / Member / Guest)
-        │                    │  HTTP Relay (跨智能体中继)
-        └──┬──────┬──────┬───┘
-           │      │      │
-       Neo(A)  Trinity  Sentinel  Medic  Assistant
-           │
-    ┌──────┴──────┐
-    │ squad_bridge │  WebSocket 通信网
-    │ config_sync  │  实例配置动态同步
-    │ resurrect    │  健康监控 + 自动复活
-    └─────────────┘
-
-    Neo ──▶ Staging 验证空间 ──▶ 自动部署、日志检查、结果上报
+         ┌────────┼────────┐
+         ▼        ▼        ▼
+    HF Staging  MS Staging  (已通过实战验证)
 ```
 
-> Neo 作为军团指挥官，可自主拉取上游代码 → 部署到 Staging → 检查构建/运行日志 → 验证通过后报告。Staging 四空间已通过实战验证。
+| 层 | 职责 |
+|----|------|
+| platform（cloud-agent-gateway） | 平台探测、OAuth 回调、HTTP Relay 中继 → 任何 agent 框架都可用 |
+| squad（nanobot-legion） | Gatekeeper 多智能体网关、RBAC 三级权限、跨智能体 WebSocket 通信网、配置同步、复活守护 |
+| agent（upstream nanobot） | 原生单智能体，零定制 |
 
 ## 核心组件
 
