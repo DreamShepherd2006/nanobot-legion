@@ -93,9 +93,9 @@ fi
 # ── 3. 定义平台配置 ────────────────────────────────
 # 格式: "平台标识|本地workspace路径|远程push命令|验证url_relay|验证url_health"
 declare -A PLATFORM_INFO
-PLATFORM_INFO[hf-staging]="/data/instances/neo/workspace/staging-deploy|git push origin master:main|https://huggingface.co/spaces/DreamShepherd2006/Nanobot-Staging|https://dreamshepherd2006-nanobot-staging.hf.space/health"
-PLATFORM_INFO[ms]="/data/instances/neo/workspace/modelscope-deploy|git push origin master|https://www.modelscope.cn/studios/Stone2006/nanobot-multi-agent-nightly|https://stone2006-nanobot-multi-agent-nightly.ms.show/health"
-PLATFORM_INFO[nightly]="/data/instances/neo/workspace/nightly-sync|git push origin main|https://huggingface.co/spaces/DreamShepherd2006/nanobot-multi-agent-nightly|https://dreamshepherd2006-nanobot-multi-agent-nightly.hf.space/health"
+PLATFORM_INFO[hf-staging]="/data/instances/neo/workspace/repos/deploy-hf-r-Nanobot-Staging|git push origin master:main|https://huggingface.co/spaces/DreamShepherd2006/Nanobot-Staging|https://dreamshepherd2006-nanobot-staging.hf.space/health"
+PLATFORM_INFO[ms]="/data/instances/neo/workspace/repos/deploy-ms-r-nanobot-multi-agent-nightly|git push origin master|https://www.modelscope.cn/studios/Stone2006/nanobot-multi-agent-nightly|https://stone2006-nanobot-multi-agent-nightly.ms.show/health"
+PLATFORM_INFO[nightly]="/data/instances/neo/workspace/repos/deploy-hf-r-nanobot-multi-agent-nightly|git push origin main|https://huggingface.co/spaces/DreamShepherd2006/nanobot-multi-agent-nightly|https://dreamshepherd2006-nanobot-multi-agent-nightly.hf.space/health"
 
 # ── 4. 同步文件函数 ────────────────────────────────
 # ── 4b. GitHub 反向同步 ──────────────────────────────
