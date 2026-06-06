@@ -25,7 +25,7 @@ COPY nanobot/ nanobot/
 COPY bridge/ bridge/
 COPY webui/ webui/
 
-# ── 4. Legion: kernel patches (sed) ────────────────────────
+# ── 4. Legion: kernel patches (sed + Python scripts) ────────
 RUN echo "💉 [Legion] kernel protocol patches..." && \
     sed -i 's/config.gateway.host/"0.0.0.0"/g' nanobot/cli/commands.py && \
     sed -i 's/host = host if host is not None else api_cfg.host/host = "0.0.0.0"/g' nanobot/cli/commands.py && \
@@ -35,10 +35,10 @@ RUN echo "💉 [Legion] kernel protocol patches..." && \
     echo "✅ kernel patches done"
 
 # ── 5. Legion: WebUI patches (BEFORE full install — npm build) ──
-COPY deploy/huggingface/patch_legion_v4_client.py /tmp/
-COPY deploy/huggingface/patch_legion_v6_sidebar.py /tmp/
-COPY deploy/huggingface/patch_webui_squad_sessions.py /tmp/
-COPY deploy/huggingface/patch_package_json_radix.py /tmp/
+COPY deploy/huggingface/patches/v0.2.0_92f2ff3/patch_legion_v4_client.py /tmp/
+COPY deploy/huggingface/patches/v0.2.0_92f2ff3/patch_legion_v6_sidebar.py /tmp/
+COPY deploy/huggingface/patches/v0.2.0_92f2ff3/patch_webui_squad_sessions.py /tmp/
+COPY deploy/huggingface/patches/v0.2.0_92f2ff3/patch_package_json_radix.py /tmp/
 RUN python3 /tmp/patch_legion_v4_client.py && \
     python3 /tmp/patch_legion_v6_sidebar.py && \
     python3 /tmp/patch_webui_squad_sessions.py && \
@@ -49,9 +49,9 @@ RUN python3 /tmp/patch_legion_v4_client.py && \
 RUN uv pip install --system --no-cache ".[matrix]"
 
 # ── 7. Legion: Python runtime patches (AFTER full install — site-packages now populated) ──
-COPY deploy/huggingface/patch_message_hardening.py /tmp/
-COPY deploy/huggingface/patch_squad_error_events.py /tmp/
-COPY deploy/huggingface/patch_gatekeeper_identity.py /tmp/
+COPY deploy/huggingface/patches/v0.2.0_92f2ff3/patch_message_hardening.py /tmp/
+COPY deploy/huggingface/patches/v0.2.0_92f2ff3/patch_squad_error_events.py /tmp/
+COPY deploy/huggingface/patches/v0.2.0_92f2ff3/patch_gatekeeper_identity.py /tmp/
 RUN python3 /tmp/patch_message_hardening.py && \
     python3 /tmp/patch_squad_error_events.py && \
     python3 /tmp/patch_gatekeeper_identity.py && \
