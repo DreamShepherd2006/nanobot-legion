@@ -2,7 +2,7 @@
 
 将单智能体 [NanoBot](https://github.com/HKUDS/nanobot) 扩展为多智能体协同指挥系统的部署层，运行于 Hugging Face Spaces / ModelScope Studio。
 
-> 🧪 跟踪 [NanoBot v0.2.0](https://github.com/HKUDS/nanobot/releases/tag/v0.2.0)（upstream/nightly [`92f2ff3a`](https://github.com/HKUDS/nanobot/commit/92f2ff3a)）
+> 🧪 跟踪 [NanoBot v0.2.1](https://github.com/HKUDS/nanobot/releases/tag/v0.2.1)（upstream/nightly [`dbdb146f`](https://github.com/HKUDS/nanobot/commit/dbdb146f)）
 
 ## 仓库关系
 
@@ -99,12 +99,15 @@ cloud-agent-gateway                          ← 框架底层 (pip 包)
 | `squad_bridge_cross.py` | 跨空间 relay（Staging → Nightly）、调用方白名单 + 远程 token 认证 |
 | `squad_config_sync.py` | 实例配置同步——新 agent 从模板创建，已有 agent 仅更新动态端口与白名单 |
 | `push_tasks.py` | 任务进度推送——结构化 JSON `task_update` 事件，前端实时展示 |
-| `platform_setup.py` | 启动时平台探测 + 自动选配 |
 | `squad_config_loader.py` | 从 JSON 配置注入运行时环境变量 |
-| `entrypoint.sh` | 容器入口：平台检测 → 选配 → 实例模板下发 → 补丁注入 → 保活启动 |
+| `entrypoint.sh` | 容器入口：调用 `cloud_agent_gateway.platform_setup` → 实例模板下发 → 补丁注入 → 保活启动 |
 | `resurrect_neo.sh` | Neo 离线 > 150s 自动复活（跨平台路径 `$INSTANCE_ROOT`），冷却 300s |
 
 ### 多平台配置
+
+> **2026-06 重构**：`deploy/cloud/` 目录已删除，入口脚本和配置模板统一放在仓库根目录。
+> - Cloud Demo 空间：`config.template.json` + `entrypoint.sh` 位于根目录
+> - Staging 空间：`entrypoint.sh` 位于根目录，平台探测统一走 `python3 -m cloud_agent_gateway.platform_setup`
 
 ```
 deploy/huggingface/
