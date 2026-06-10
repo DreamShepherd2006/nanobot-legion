@@ -30,6 +30,7 @@ import glob as _glob_module
 import json
 import os
 import re
+import signal as _signal
 import subprocess
 import sys
 import time
@@ -43,13 +44,14 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse, Response, StreamingResponse
 from starlette.middleware.sessions import SessionMiddleware
 import websockets
+from cloud_agent_gateway.channel_binding import discover as discover_bindings
 
 # ── Platform (auto-detected) ──
 # IMPORTANT: squad_config_loader must be imported BEFORE platforms!
 # It injects DEPLOY_PLATFORM into os.environ at module level, which
 # platforms.__init__._detect() reads in its matches() step 0.
 from squad_config_loader import get_relay_timeout  # noqa: E402
-from platforms import platform  # noqa: E402
+from cloud_agent_gateway.platforms import platform  # noqa: E402
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -102,6 +104,10 @@ class Gatekeeper:
         self._relay_timeout: int = 120
         self._dlq_dir: str = ""
 
+        # ── Session Bridge: WS chat_id persistence ─────────────
+        # Maps username → chat_id so reconnecting clients resume the same session.
+        self._ws_sessions: dict[str, str] = {}
+
     # ═══════════════════════════════════════════════════════════
     # [Section 1] Setup — parse env, build state (called once)
     # ═══════════════════════════════════════════════════════════
@@ -153,6 +159,119 @@ class Gatekeeper:
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         print(f"[GATEKEEPER] [{timestamp}] {msg}")
         sys.stdout.flush()
+
+    def _ensure_pinned_binding_chat(self):
+        """Create pinned sidebar chat with channel binding links."""
+        _bindings = getattr(self, "_bindings", [])
+        if not _bindings:
+            self._log("📌 无可用的绑定通道，跳过 pinned chat")
+            return
+
+        import os as _os, json as _json, uuid as _uuid, time as _time
+
+        _BINDING_TITLE = "社交通道配置提示"
+        _instance_dir = self._platform.instance_path(self.webui_agent)
+        # sessions are under workspace/sessions (SessionManager stores at workspace/sessions/)
+        _sessions_dir = f"{_instance_dir}/workspace/sessions"
+        _webui_dir = f"{_instance_dir}/webui"
+        _sidebar_path = f"{_webui_dir}/sidebar-state.json"
+        _now = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+
+        # Generate binding links (same format as Cloud Demo oauth_proxy.py)
+        _rows = "\n".join(
+            f"| {_spec.icon} {_spec.display} | [绑定{_spec.display}](/bind/{_spec.name}) |"
+            for _spec in _bindings
+        )
+
+        _content = f"""\
+# 📱 社交通道配置
+
+将 nanobot 连接到社交通道，随时随地对话。
+
+| 通道 | 操作 |
+|------|------|
+{_rows}
+👆 点击上方链接即可操作，无需在此聊天。"""
+
+        # Clean up old binding sessions
+        if _os.path.exists(_sidebar_path):
+            try:
+                with open(_sidebar_path) as _f:
+                    _state = _json.load(_f) or {}
+                _new_pinned = []
+                _changed = False
+                for _pk in _state.get("pinned_keys", []):
+                    if not isinstance(_pk, str) or not _pk.startswith("websocket:"):
+                        _new_pinned.append(_pk)
+                        continue
+                    _cid = _pk.split(":", 1)[1]
+                    _sp = f"{_sessions_dir}/websocket_{_cid}.jsonl"
+                    if _os.path.exists(_sp):
+                        try:
+                            with open(_sp) as _sf:
+                                _first = _json.loads(_sf.readline())
+                            if _first.get("metadata", {}).get("title") == _BINDING_TITLE:
+                                _os.unlink(_sp)
+                                _tp = f"{_webui_dir}/websocket_{_cid}.jsonl"
+                                if _os.path.exists(_tp):
+                                    _os.unlink(_tp)
+                                _changed = True
+                                continue
+                        except Exception:
+                            pass
+                    _new_pinned.append(_pk)
+                if _changed:
+                    _state["pinned_keys"] = _new_pinned
+                    _state["updated_at"] = _now
+                    with open(_sidebar_path, "w") as _f:
+                        _json.dump(_state, _f, ensure_ascii=False, indent=2)
+                        _f.write("\n")
+            except Exception as _e:
+                self._log(f"⚠️ binding session cleanup: {_e}")
+
+        # Create new binding session
+        _cid = str(_uuid.uuid4())
+        _key = f"websocket:{_cid}"
+        _fpath = f"{_sessions_dir}/websocket_{_cid}.jsonl"
+        _os.makedirs(_sessions_dir, exist_ok=True)
+
+        with open(_fpath, "w") as _f:
+            _f.write(_json.dumps({
+                "_type": "metadata", "key": _key,
+                "created_at": _now, "updated_at": _now,
+                "metadata": {"title": _BINDING_TITLE, "webui": True},
+                "last_consolidated": 0,
+            }, ensure_ascii=False) + "\n")
+            _f.write(_json.dumps({
+                "role": "user", "content": _content,
+                "timestamp": _now,
+            }, ensure_ascii=False) + "\n")
+
+        # WebUI transcript
+        _tpath = f"{_webui_dir}/websocket_{_cid}.jsonl"
+        with open(_tpath, "w") as _tf:
+            _tf.write(_json.dumps({"event": "delta", "text": _content, "chat_id": _cid}, ensure_ascii=False) + "\n")
+            _tf.write(_json.dumps({"event": "stream_end", "text": _content, "chat_id": _cid}, ensure_ascii=False) + "\n")
+            _tf.write(_json.dumps({"event": "turn_end", "chat_id": _cid}, ensure_ascii=False) + "\n")
+
+        # Pin to sidebar
+        _os.makedirs(_webui_dir, exist_ok=True)
+        _sidebar_state = {}
+        if _os.path.exists(_sidebar_path):
+            try:
+                with open(_sidebar_path) as _f:
+                    _sidebar_state = _json.load(_f) or {}
+            except Exception:
+                pass
+        _sidebar_state.setdefault("pinned_keys", []).insert(0, _key)
+        _sidebar_state["updated_at"] = _now
+        _sidebar_state.setdefault("schema_version", 1)
+        with open(_sidebar_path, "w") as _f:
+            _json.dump(_sidebar_state, _f, ensure_ascii=False, indent=2)
+            _f.write("\n")
+
+        self._binding_chat_cid = _cid
+        self._log(f"📌 pinned binding chat ({_cid[:12]}...) — {len(_bindings)} channels")
 
     # ═══════════════════════════════════════════════════════════
     # [Section 2] Roster parsing — NANOBOT_PEER_* → squad_roster
@@ -558,6 +677,7 @@ class Gatekeeper:
     async def _lifespan(self, _app: FastAPI):
         """FastAPI lifespan: startup → background tasks → yield → shutdown."""
         await self._platform.startup()
+        self._ensure_pinned_binding_chat()
         asyncio.create_task(self._legion_monitor())
         asyncio.create_task(self._log_bridge())
         asyncio.create_task(self._dlq_replay())
@@ -592,6 +712,7 @@ class Gatekeeper:
                 {"status": "bad_request", "error": "invalid JSON"}, status_code=400)
 
         sender = (body.get("sender") or "").strip()
+        commander = (body.get("commander") or "").strip()
         target = (body.get("target") or "").strip().lower()
         message = body.get("message") or ""
         corr_id = body.get("correlation_id", f"sq-relay-{uuid4().hex[:8]}")
@@ -613,11 +734,13 @@ class Gatekeeper:
                  "error": f"'{target}' is offline",
                  "correlation_id": corr_id}, status_code=503)
 
-        # Permission (delegated to platform)
-        if not self._platform.check_relay_permission(sender, target):
+        # Permission: check commander (OAuth identity) if provided,
+        # otherwise fall back to sender (backward compat).
+        auth_identity = commander or sender
+        if not self._platform.check_relay_permission(auth_identity, target):
             return JSONResponse({
                 "status": "permission_denied",
-                "error": f"'{sender}' not authorized for '{target}'",
+                "error": f"'{auth_identity}' not authorized for '{target}'",
                 "correlation_id": corr_id,
             }, status_code=403)
 
@@ -643,11 +766,22 @@ class Gatekeeper:
                         "correlation_id": corr_id,
                     }, status_code=502)
 
-                payload = json.dumps({
+                # Inject relay identity so neo sees:
+                #   - which agent relayed (sender_id: agent:<agent>)
+                #   - which Commander authorised it (commander_id: oauth:<user>)
+                # This mirrors the WebUI path where process_commander_message
+                # injects sender_id=oauth:<username>.
+                envelope = {
                     "type": "message",
                     "chat_id": target_info["id"],
-                    "content": f"[{sender.upper()}]: {message}",
-                })
+                    "content": message,
+                    "sender_id": f"agent:{sender}",
+                    "sender_name": sender,
+                }
+                if commander:
+                    envelope["commander_id"] = f"oauth:{commander}"
+                    envelope["commander_name"] = commander
+                payload = json.dumps(envelope)
                 await ws.send(payload)
                 self._log(f"📨 [Relay] {sender}→{target} sent ({len(payload)}B)")
 
@@ -888,8 +1022,19 @@ class Gatekeeper:
             url = httpx.URL(
                 path=f"/{path}" if path else "/",
                 query=request.url.query.encode("utf-8"))
+            blacklist = set(h.lower() for h in self._platform.proxy_header_blacklist)
             headers = {k: v for k, v in request.headers.items()
-                       if k.lower() not in ["host", "content-length"]}
+                       if k.lower() not in blacklist}
+            # 🔧 On platforms that strip Authorization header (ModelScope),
+            # fall back to ?token= query parameter for API calls.
+            if "authorization" not in {k.lower() for k in headers}:
+                _q = request.url.query.decode("utf-8") if isinstance(request.url.query, bytes) else request.url.query
+                if "token=" in _q:
+                    for _p in _q.split("&"):
+                        if _p.startswith("token="):
+                            _tok = _p.split("=", 1)[1]
+                            headers["authorization"] = f"Bearer {_tok}"
+                            break
             rp_req = client.build_request(
                 request.method, url, headers=headers,
                 content=await request.body())
@@ -1015,14 +1160,82 @@ class Gatekeeper:
                     break
         periodic_task = asyncio.create_task(_emit_periodic())
 
+        # ── Session Bridge state ──────────────────────────────
+        session_key = real_name.lower() if real_name != "Guest" else ""
+        prev_chat_id = self._ws_sessions.get(session_key, "") if session_key else ""
+        current_chat_id: str = ""  # set by neo_to_client on "ready"
+        ready_chat_event = asyncio.Event()
+        attached_confirm = asyncio.Event()
+        attach_sent = False
+
         # ── Bidirectional proxy + cluster_log inject ──
         try:
             async def client_to_neo():
-                """Commander → neo (identity injection + guest blocking)."""
+                """Commander → neo (identity injection + session bridge)."""
+                nonlocal attach_sent, current_chat_id
                 username = uname.lower().replace("_observer", "")
+                session_cid = prev_chat_id  # snapshot before loop
                 try:
+                    # ── Session Bridge: attach to previous chat ──
+                    if session_cid and is_commander:
+                        # Wait for neo's "ready" (so neo is ready to handle attach)
+                        try:
+                            await asyncio.wait_for(ready_chat_event.wait(), timeout=8.0)
+                        except asyncio.TimeoutError:
+                            self._log(f"🔗 [Session] {real_name}: ready timeout, skipping attach")
+                            session_cid = ""
+                        if session_cid:
+                            self._log(f"🔗 [Session] {real_name}: attaching to chat_id={session_cid[:12]}…")
+                            try:
+                                await neo_ws.send(json.dumps(
+                                    {"type": "attach", "chat_id": session_cid}))
+                                attach_sent = True
+                                try:
+                                    await asyncio.wait_for(attached_confirm.wait(), timeout=5.0)
+                                    self._log(f"🔗 [Session] {real_name}: attached ✓")
+                                    current_chat_id = session_cid
+                                except asyncio.TimeoutError:
+                                    self._log(f"🔗 [Session] {real_name}: attach resp timeout")
+                                    session_cid = ""
+                            except Exception:
+                                self._log(f"🔗 [Session] {real_name}: attach send failed")
+                                session_cid = ""
+
+                    # ── Main message loop ──
                     while True:
                         data = await client_ws.receive_text()
+
+                        # 🚫 Intercept messages to binding chat (static reply, no LLM)
+                        _binding_cid = getattr(self, '_binding_chat_cid', None)
+                        if _binding_cid:
+                            try:
+                                _env = json.loads(data)
+                                if isinstance(_env, dict) and _env.get("chat_id") == _binding_cid:
+                                    if _env.get("type") == "message":
+                                        _chs = "、".join(f"绑定{b.display}" for b in getattr(self, '_bindings', []))
+                                        _reply = f"👆 请点击上方链接绑定社交通道，无需在此聊天。\n\n点击 {_chs} 即可操作。"
+                                        await client_ws.send_text(json.dumps({
+                                            "event": "delta", "data": _reply,
+                                            "chat_id": _binding_cid,
+                                            "sender_id": f"oauth:{username}",
+                                            "sender_name": username,
+                                        }))
+                                        await client_ws.send_text(json.dumps({
+                                            "event": "stream_end", "chat_id": _binding_cid,
+                                            "sender_id": f"oauth:{username}",
+                                        }))
+                                        await client_ws.send_text(json.dumps({
+                                            "event": "turn_end", "chat_id": _binding_cid,
+                                            "sender_id": f"oauth:{username}",
+                                        }))
+                                        self._log("🚫 WS: blocked binding chat msg → static reply")
+                                        continue
+                                    if _env.get("type") == "attach":
+                                        # Attaching to binding chat → allow (WebUI needs it)
+                                        pass
+                            except Exception:
+                                pass
+
                         processed, blocked = self._platform.process_commander_message(
                             data, username, real_name, is_commander)
                         if blocked is not None:
@@ -1030,17 +1243,49 @@ class Gatekeeper:
                                 "event": "blocked", "type": "blocked",
                                 "text": blocked}))
                             continue
+                        # Session Bridge: force persisted session for attach,
+                        # let other envelope types (message, new_chat, command, etc.)
+                        # flow with the WebUI's chat_id — Neo auto-attaches on first
+                        # message so each chat keeps its own conversation.
+                        cid = current_chat_id or session_cid
+                        if cid:
+                            try:
+                                env = json.loads(processed)
+                                if isinstance(env, dict) and env.get("type") == "attach":
+                                    env["chat_id"] = cid
+                                    processed = json.dumps(env)
+                            except Exception:
+                                pass
                         await neo_ws.send(processed)
                 except (WebSocketDisconnect, Exception):
                     pass
 
             async def neo_to_client():
-                """neo → Commander + cluster_log for LegionTerminal."""
+                """neo → Commander + cluster_log + session tracking."""
+                nonlocal current_chat_id
                 try:
                     while True:
                         data = await neo_ws.recv()
                         if isinstance(data, bytes):
                             data = data.decode("utf-8", errors="replace")
+
+                        # ── Session tracking ──
+                        try:
+                            env = json.loads(data)
+                            ev = env.get("event", "") if isinstance(env, dict) else ""
+                            if ev == "ready":
+                                cid = env.get("chat_id", "")
+                                if cid and session_key:
+                                    if not prev_chat_id:
+                                        # First connection: store session
+                                        self._ws_sessions[session_key] = cid
+                                        current_chat_id = cid
+                                ready_chat_event.set()
+                            elif ev == "attached" and attach_sent:
+                                attached_confirm.set()
+                        except Exception:
+                            pass
+
                         # 1) passthrough to Commander's WebUI
                         await client_ws.send_text(data)
                         # 2) also inject as cluster_log for LegionTerminal
@@ -1082,7 +1327,9 @@ def create_app() -> FastAPI:
 
     # ── FastAPI app ──
     _app = FastAPI(lifespan=gk._lifespan)
-    _app.add_middleware(gk._platform.create_auth_middleware())
+    _auth_mw = gk._platform.create_auth_middleware()
+    if _auth_mw is not None:
+        _app.add_middleware(_auth_mw)
     _app.add_middleware(SessionMiddleware, **gk._platform.session_kwargs)
 
     # ── Platform-specific routes (OAuth, etc.) ──
@@ -1094,11 +1341,99 @@ def create_app() -> FastAPI:
         request.scope["scheme"] = "https"
         return await call_next(request)
 
-    # ── Wire routes ───────────────────────────────────────────
-    # ── Channel binding (WeChat QR / DingTalk) ──
-    from channel_binding import router as bind_router
-    _app.include_router(bind_router)
+    # ── Channel bind routes (from cloud-agent-gateway) ─────────
+    try:
+        _bindings = discover_bindings()
+    except Exception as _be:
+        print(f"⚠️ bindings discover failed: {_be}")
+        _bindings = []
+    gk._bindings = _bindings
 
+    for _spec in _bindings:
+        _ch = _spec.name
+        _html = _spec.bind_page_html
+
+        async def _bind_page(request: Request, _ch=_ch, _html=_html):
+            _user = request.session.get("user")
+            if not _user:
+                return RedirectResponse("/")
+            return HTMLResponse(_html)
+
+        async def _bind_submit(request: Request, _ch=_ch):
+            _user = request.session.get("user")
+            if not _user:
+                return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+            _username = gk._platform.extract_username(_user)
+            _agent = gk._platform.get_agent_for_user(_username)
+            if not _agent:
+                return JSONResponse(
+                    {"ok": False, "error": f"用户 {_username} 没有关联的 agent"},
+                    status_code=403,
+                )
+            _form = {}
+            try:
+                ct = request.headers.get("content-type", "")
+                if "application/json" in ct:
+                    _body_data = await request.json()
+                    for _k, _v in _body_data.items():
+                        _form[_k] = str(_v).strip()
+                else:
+                    _raw = await request.form()
+                    for _k in _raw.keys():
+                        _form[_k] = str(_raw.get(_k, "")).strip()
+            except Exception:
+                pass
+            _instance_dir = gk._platform.instance_path(_agent)
+            _account_dir = f"{_instance_dir}/channels/{_ch}"
+            os.makedirs(_account_dir, exist_ok=True)
+            _account_path = f"{_account_dir}/account.json"
+            with open(_account_path, "w") as _f:
+                json.dump(_form, _f)
+            os.chmod(_account_path, 0o600)
+
+            # Also update config.json so the channel is enabled
+            _cfg_path = f"{_instance_dir}/config.json"
+            try:
+                with open(_cfg_path) as _f:
+                    _cfg = json.load(_f)
+            except Exception:
+                _cfg = {}
+            _ch_cfg = _cfg.get("channels", {}).get(_ch, {})
+            _ch_cfg["enabled"] = True
+            _ch_cfg.setdefault("allow_from", ["*"])
+            _ch_cfg.update(_form)
+            _cfg.setdefault("channels", {})[_ch] = _ch_cfg
+            with open(_cfg_path, "w") as _f:
+                json.dump(_cfg, _f, ensure_ascii=False, indent=2)
+            os.chmod(_cfg_path, 0o600)
+
+            print(f"✅ /bind/{_ch}: user={_username} → agent={_agent}, creds → {_account_path}")
+
+            # ── Restart agent so it loads fresh config.json with new channel ──
+            _token = f"instances/{_agent}/"
+            _killed = 0
+            for _cmdline_path in _glob_module.glob("/proc/[0-9]*/cmdline"):
+                try:
+                    with open(_cmdline_path, "rb") as _f:
+                        _raw = _f.read()
+                    if _token.encode() in _raw and b"nanobot gateway" in _raw:
+                        _pid = int(os.path.basename(os.path.dirname(_cmdline_path)))
+                        os.kill(_pid, _signal.SIGTERM)
+                        _killed += 1
+                        print(f"🔄 /bind/{_ch}: sent SIGTERM to {_agent} (PID {_pid})")
+                except (OSError, ProcessLookupError):
+                    continue
+            if _killed:
+                print(f"🔁 /bind/{_ch}: killed {_killed} process(es) — gatekeeper will auto-resurrect")
+            else:
+                print(f"⚠️ /bind/{_ch}: no gateway process found for {_agent} — manual restart may be needed")
+
+            return JSONResponse({"ok": True, "channel": _ch, "agent": _agent, "message": f"{_ch} 已绑定"})
+
+        _app.get(f"/bind/{_ch}")(_bind_page)
+        _app.post(f"/bind/{_ch}/submit")(_bind_submit)
+
+    # ── Wire routes ───────────────────────────────────────────
     _app.get("/health")(gk._handle_health)
     _app.post("/api/squad/relay")(gk._handle_relay)
     _app.post("/api/squad/tasks")(gk._handle_tasks_post)

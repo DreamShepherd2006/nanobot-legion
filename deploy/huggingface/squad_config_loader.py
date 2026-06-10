@@ -170,5 +170,5 @@ def get_dlq_dir() -> str:
 # platforms.matches() 会读取 os.environ["DEPLOY_PLATFORM"]。
 _cfg = load_config()
 _dp = (_cfg.get("deploy_platform") or "").strip()
-if _dp and not os.environ.get("DEPLOY_PLATFORM"):
+if _dp:
     os.environ["DEPLOY_PLATFORM"] = _dp

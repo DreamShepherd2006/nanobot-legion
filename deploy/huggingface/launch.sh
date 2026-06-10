@@ -75,7 +75,7 @@ fi
 
 # ── 3. 平台环境初始化 ────────────────────────────────────────────
 echo "🧬 [System] 平台环境初始化..."
-eval "$(python3 /app/platform_setup.py)"
+eval "$(cloud-gateway-setup)"
 echo "✅ [System] 平台初始化完成"
 
 # ── 3a. Peer env fallback（squad_config.json → env）──────────────
@@ -193,7 +193,12 @@ launch_agent() {
 
     if [ -f "$config" ]; then
         echo "🚀 [$name] 启动中 (Port: $port)..."
+        # Per-agent channel binding path
+        _CHANNEL_DIR="$MOUNT_PATH/instances/$name/channels"
+        mkdir -p "$_CHANNEL_DIR"
+
         (
+            export NANOBOT_ACCOUNT_BASE="$_CHANNEL_DIR"
             exec stdbuf -oL nanobot gateway \
                 --config "$config" \
                 --workspace "$workspace" \

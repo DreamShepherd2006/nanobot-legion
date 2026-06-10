@@ -26,7 +26,7 @@ fi
 
 # ── 2. Platform detection ─────────────────────────────────────────
 echo "🔍 Detecting cloud platform..."
-eval "$(python3 /app/deploy/cloud/platform_setup.py)"
+eval "$(cloud-gateway-setup)"
 echo "✅ Platform: ${DEPLOY_PLATFORM:-unknown}"
 
 # ── 3. Storage-first: seed → persistent ───────────────────────────

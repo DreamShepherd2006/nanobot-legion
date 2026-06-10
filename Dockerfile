@@ -27,7 +27,7 @@ COPY webui/ webui/
 
 # ── 4. Legion: kernel patches (sed + Python scripts) ────────
 RUN echo "💉 [Legion] kernel protocol patches..." && \
-    sed -i 's/config.gateway.host/"0.0.0.0"/g' nanobot/cli/commands.py && \
+    sed -i '/^def _run_gateway/,/^def /{s/config\.gateway\.host/"0.0.0.0"/g}' nanobot/cli/commands.py && \
     sed -i 's/host = host if host is not None else api_cfg.host/host = "0.0.0.0"/g' nanobot/cli/commands.py && \
     sed -i '/def _authorize_websocket_handshake/a \        return None' nanobot/channels/websocket.py && \
     sed -i 's/return host in _LOCALHOSTS/return True/g' nanobot/channels/websocket.py && \
@@ -35,10 +35,10 @@ RUN echo "💉 [Legion] kernel protocol patches..." && \
     echo "✅ kernel patches done"
 
 # ── 5. Legion: WebUI patches (BEFORE full install — npm build) ──
-COPY deploy/huggingface/patches/v0.2.0_92f2ff3/patch_legion_v4_client.py /tmp/
-COPY deploy/huggingface/patches/v0.2.0_92f2ff3/patch_legion_v6_sidebar.py /tmp/
-COPY deploy/huggingface/patches/v0.2.0_92f2ff3/patch_webui_squad_sessions.py /tmp/
-COPY deploy/huggingface/patches/v0.2.0_92f2ff3/patch_package_json_radix.py /tmp/
+COPY deploy/huggingface/patches/v0.2.1_dbdb146f/patch_legion_v4_client.py /tmp/
+COPY deploy/huggingface/patches/v0.2.1_dbdb146f/patch_legion_v6_sidebar.py /tmp/
+COPY deploy/huggingface/patches/v0.2.1_dbdb146f/patch_webui_squad_sessions.py /tmp/
+COPY deploy/huggingface/patches/v0.2.1_dbdb146f/patch_package_json_radix.py /tmp/
 RUN python3 /tmp/patch_legion_v4_client.py && \
     python3 /tmp/patch_legion_v6_sidebar.py && \
     python3 /tmp/patch_webui_squad_sessions.py && \
@@ -49,12 +49,14 @@ RUN python3 /tmp/patch_legion_v4_client.py && \
 RUN uv pip install --system --no-cache ".[matrix]"
 
 # ── 7. Legion: Python runtime patches (AFTER full install — site-packages now populated) ──
-COPY deploy/huggingface/patches/v0.2.0_92f2ff3/patch_message_hardening.py /tmp/
-COPY deploy/huggingface/patches/v0.2.0_92f2ff3/patch_squad_error_events.py /tmp/
-COPY deploy/huggingface/patches/v0.2.0_92f2ff3/patch_gatekeeper_identity.py /tmp/
+COPY deploy/huggingface/patches/v0.2.1_dbdb146f/patch_message_hardening.py /tmp/
+COPY deploy/huggingface/patches/v0.2.1_dbdb146f/patch_squad_error_events.py /tmp/
+COPY deploy/huggingface/patches/v0.2.1_dbdb146f/patch_gatekeeper_identity.py /tmp/
+COPY deploy/huggingface/patches/v0.2.1_dbdb146f/patch_webui_transcript_user.py /tmp/
 RUN python3 /tmp/patch_message_hardening.py && \
     python3 /tmp/patch_squad_error_events.py && \
     python3 /tmp/patch_gatekeeper_identity.py && \
+    python3 /tmp/patch_webui_transcript_user.py && \
     echo "✅ runtime patches applied"
 
 # ── 8. Build WhatsApp bridge + version stamp ─────────────────
@@ -71,10 +73,31 @@ RUN uv pip install --system --no-cache \
     huggingface_hub joserfc websocket-client
 
 # ── 10. Legion: minimal instance seed (storage罐优先，此仅首次兜底) ─
-RUN mkdir -p /app/instances/_template /app/instances/neo-workspace/memory && \
-    echo '{"gateway":{"host":"0.0.0.0","port":0},"channels":{"websocket":{"port":0}},"tools":{"exec":{"allowed_env_keys":["NANOBOT_TOKEN","NANOBOT_PEER_NEO","NANOBOT_PEER_TRINITY","NANOBOT_PEER_SENTINEL","NANOBOT_PEER_MEDIC","NANOBOT_PEER_ASSISTANT","SQUAD_RELAY_TOKEN","SQUAD_RELAY_TOKEN_HF_NanobotNightly","COMMANDER_WHITELIST","USER_AGENT_MAP"]}}}' > /app/instances/_template/config.json && \
+RUN mkdir -p /app/instances/neo-workspace/memory && \
     printf '📍 当前空间: Staging (Nanobot-Staging)\n→ 部署路径: deploy/huggingface/ | /data: 持久化\n' > /app/instances/neo-workspace/AGENTS.md && \
-    echo "✅ minimal seed created (_template + neo-workspace)"
+    echo "✅ workspace seed created"
+COPY deploy/huggingface/_template_config.json /app/instances/_template/config.json
+
+# ── 10b. Cloud Agent Gateway (pip package) ──────────────────
+COPY .framework-version /tmp/.framework-version
+COPY cloud-agent-gateway/ /tmp/cloud-agent-gateway/
+RUN pip install --break-system-packages /tmp/cloud-agent-gateway/ && \
+    EXPECTED=$(cat /tmp/.framework-version) && \
+    ACTUAL=$(python3 -c 'import cloud_agent_gateway; print(cloud_agent_gateway.__version__)') && \
+    if [ "$EXPECTED" != "$ACTUAL" ]; then \
+        echo "❌ Framework version mismatch! Expected: $EXPECTED, Installed: $ACTUAL" >&2; \
+        echo "   The cloud-agent-gateway local copy is out of sync." >&2; \
+        exit 1; \
+    fi && \
+    echo "✅ cloud-agent-gateway $ACTUAL (matches .framework-version $EXPECTED)" && \
+    rm -rf /tmp/cloud-agent-gateway/
+
+# ── 10c. Channel runtime patches (auto-reload from account.json) ─
+RUN python3 -m cloud_agent_gateway.deploy.cloud.patch_qq_reload && \
+    python3 -m cloud_agent_gateway.deploy.cloud.patch_feishu_reload && \
+    python3 -m cloud_agent_gateway.deploy.cloud.patch_dingtalk_reload && \
+    python3 -m cloud_agent_gateway.deploy.cloud.patch_weixin_reload && \
+    echo "✅ channel runtime patches applied"
 
 # ── 11. Legion: core scripts ───────────────────────────────
 COPY deploy/huggingface/gatekeeper.py ./gatekeeper.py
@@ -87,20 +110,16 @@ COPY deploy/huggingface/squad_config.hf-nightly.json ./squad_config.hf-nightly.j
 COPY deploy/huggingface/squad_config.ms-staging.json ./squad_config.ms-staging.json
 COPY deploy/huggingface/squad_config_loader.py ./squad_config_loader.py
 COPY deploy/huggingface/push_tasks.py ./push_tasks.py
-COPY deploy/huggingface/platform_setup.py ./platform_setup.py
-COPY deploy/huggingface/platforms/ ./platforms/
 COPY deploy/huggingface/scripts/resurrect_neo.sh /app/scripts/resurrect_neo.sh
 
 # ── 11b. Legion: cloud platform layer ───────────────────────
-COPY deploy/cloud/platform_setup.py /app/deploy/cloud/platform_setup.py
-COPY deploy/cloud/platforms/ /app/deploy/cloud/platforms/
 COPY deploy/cloud/entrypoint.sh /app/deploy/cloud/entrypoint.sh
 RUN sed -i 's/\r$//' /app/deploy/cloud/entrypoint.sh && chmod +x /app/deploy/cloud/entrypoint.sh
 
 # ── 12. User & permissions ─────────────────────────────────
 RUN useradd -m -u 1000 -s /bin/bash nanobot && \
     mkdir -p /home/nanobot/.nanobot && \
-    chmod +x /app/gatekeeper.py /app/squad_bridge.py /app/squad_bridge_cross.py /app/squad_config_sync.py /app/push_tasks.py /app/platform_setup.py /app/scripts/resurrect_neo.sh && \
+    chmod +x /app/gatekeeper.py /app/squad_bridge.py /app/squad_bridge_cross.py /app/squad_config_sync.py /app/push_tasks.py /app/scripts/resurrect_neo.sh && \
     chown -R nanobot:nanobot /home/nanobot /app
 
 # ── 13. Entrypoint ──────────────────────────────────────────
