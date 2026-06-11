@@ -2,7 +2,8 @@
 
 将单智能体 [NanoBot](https://github.com/HKUDS/nanobot) 扩展为多智能体协同指挥系统的部署层，运行于 Hugging Face Spaces / ModelScope Studio。
 
-> 🧪 跟踪 [NanoBot v0.2.1](https://github.com/HKUDS/nanobot/releases/tag/v0.2.1)（upstream/nightly [`dbdb146f`](https://github.com/HKUDS/nanobot/commit/dbdb146f)）
+> 🛡️ 您正在查看 **main** 分支（生产环境 / Nightly 空间）
+> — 基于 [NanoBot `dbdb146f`](https://github.com/HKUDS/nanobot/commit/dbdb146f)（v0.2.1+）
 
 ## 仓库关系
 
