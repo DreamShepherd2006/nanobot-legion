@@ -146,6 +146,12 @@ if [ -d "$MOUNT_PATH" ]; then
     echo "✅ [Storage] 持久化存储已链接 ($MOUNT_PATH/instances → $DIR/instances)"
 fi
 
+# WeChat 状态目录桥接 — 绑定写入 ~/.nanobot/weixin，nanobot 读取实例目录
+mkdir -p "$MOUNT_PATH/instances/neo/channels/weixin"
+rm -rf "$HOME/.nanobot/weixin" 2>/dev/null || true
+ln -sfn "$MOUNT_PATH/instances/neo/channels/weixin" "$HOME/.nanobot/weixin"
+echo "🔗 [WeChat] 微信状态目录已桥接 ($HOME/.nanobot/weixin → $MOUNT_PATH/instances/neo/channels/weixin)"
+
 # ── 7. 模板恢复（每次启动强制同步）────────────────────────────────
 if [ -d "/app/instances/_template" ]; then
     mkdir -p "$MOUNT_PATH/instances"
