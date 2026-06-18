@@ -1,3 +1,13 @@
+---
+title: Nanobot Staging
+emoji: "🧪"
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+hf_oauth: true
+---
+
 # deploy-hf-r-Nanobot-Staging
 
 ## 空间信息
