@@ -1,3 +1,10 @@
+---
+title: Nanobot Staging
+emoji: 🧪
+sdk: docker
+app_port: 7860
+---
+
 # deploy-ms-r-nanobot-multi-agent-nightly
 
 ## 空间信息
