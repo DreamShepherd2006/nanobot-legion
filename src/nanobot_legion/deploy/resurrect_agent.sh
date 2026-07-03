@@ -53,7 +53,7 @@ fi
 
 # ── 5. 配置同步 ──
 mark "执行 squad_config_sync.py..."
-python3 /app/squad_config_sync.py 2>&1 | tee -a "$NEO_LOG" || mark "⚠️ config sync 失败，继续..."
+python3 -m nanobot_legion.squad_config_sync 2>&1 | tee -a "$NEO_LOG" || mark "⚠️ config sync 失败，继续..."
 
 # ── 6. 杀旧进程 ──
 mark "扫描旧 Neo 进程..."
