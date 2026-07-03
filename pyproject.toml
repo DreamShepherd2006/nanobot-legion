@@ -26,4 +26,10 @@ dev = ["pytest", "pytest-asyncio"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-nanobot_legion = ["deploy/*.sh", "deploy/*.json", "deploy/scripts/*.sh"]
+nanobot_legion = [
+    "deploy/*.sh",
+    "deploy/*.json",
+    "deploy/scripts/*.sh",
+    "patched_files/**/*.py",
+    "webui_dist/**/*",
+]

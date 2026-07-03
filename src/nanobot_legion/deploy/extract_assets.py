@@ -12,6 +12,7 @@ ASSETS = [
     # Shell scripts
     ('launch.sh', 'deploy/huggingface/launch.sh'),
     'scripts/resurrect_neo.sh',
+    ('entrypoint.sh', 'entrypoint.sh'),
 ]
 
 
