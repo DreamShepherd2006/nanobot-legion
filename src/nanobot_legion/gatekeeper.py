@@ -50,9 +50,9 @@ from cloud_agent_gateway.channel_binding import discover as discover_bindings
 # IMPORTANT: squad_config_loader must be imported BEFORE platforms!
 # It injects DEPLOY_PLATFORM into os.environ at module level, which
 # platforms.__init__._detect() reads in its matches() step 0.
-from squad_config_loader import get_relay_timeout  # noqa: E402
+from .squad_config_loader import get_relay_timeout  # noqa: E402
 from cloud_agent_gateway.platforms import platform  # noqa: E402
-from agent_config import create_agent_routes  # noqa: E402
+from .agent_config import create_agent_routes  # noqa: E402
 
 
 # ═══════════════════════════════════════════════════════════════
