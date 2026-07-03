@@ -168,11 +168,8 @@ fi
 
 # ── 8. 军团配置同步 ────────────────────────────────────────────────
 echo "🔧 [System] 执行军团配置同步..."
-if [ -f "/app/squad_config_sync.py" ]; then
-    python3 /app/squad_config_sync.py
-else
-    echo "⚠️ [System] 未发现 squad_config_sync.py，跳过"
-fi
+echo "🔧 [System] 执行军团配置同步 (via nanobot-legion pip package)..."
+python3 -m nanobot_legion.squad_config_sync
 
 # ── 9. 日志管道预热 ────────────────────────────────────────────────
 echo "📑 [System] 正在初始化日志通道..."
@@ -251,7 +248,7 @@ else
 fi
 
 mkdir -p "$MOUNT_PATH/instances/logs"
-stdbuf -oL python3 -u gatekeeper.py 2>&1 \
+stdbuf -oL python3 -u -m nanobot_legion.gatekeeper 2>&1 \
     | stdbuf -oL sed "s/^/[GATEKEEPER] /" \
     | tee -a "$MOUNT_PATH/instances/logs/gatekeeper.log"
 
