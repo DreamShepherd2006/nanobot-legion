@@ -79,8 +79,8 @@ def main() -> None:
     _deploy_patched_python(nanobot_dir, pkg_dir)
     _deploy_webui_dist(nanobot_dir, pkg_dir)
 
-    from nanobot_legion.deploy.extract_assets import main as extract_main
-    extract_main()
+    from nanobot_legion.deploy.extract_assets import extract
+    extract()
     print("✅ nanobot-legion install complete")
 
 

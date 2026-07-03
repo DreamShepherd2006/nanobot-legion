@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Extract deploy assets from the nanobot-legion package to /app/."""
 import os
 from nanobot_legion.deploy import read_asset
