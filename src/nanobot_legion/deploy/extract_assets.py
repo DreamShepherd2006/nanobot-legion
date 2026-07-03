@@ -10,21 +10,23 @@ ASSETS = [
     'squad_config.hf-nightly.json',
     'squad_config.ms-staging.json',
     # Shell scripts
-    'launch.sh',
+    ('launch.sh', 'deploy/huggingface/launch.sh'),
     'scripts/resurrect_neo.sh',
 ]
 
 
 def extract(target=TARGET):
-    for name in ASSETS:
-        dest = os.path.join(target, name)
+    for spec in ASSETS:
+        if isinstance(spec, tuple):
+            src_name, dest_rel = spec
+        else:
+            src_name = dest_rel = spec
+        dest = os.path.join(target, dest_rel)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         with open(dest, 'w') as f:
-            f.write(read_asset(name))
-    for name in ['resurrect_agent.sh', 'resurrect_neo.sh']:
-        src = os.path.join(target, 'scripts', name)
-        if os.path.exists(src):
-            os.chmod(src, 0o755)
+            f.write(read_asset(src_name))
+        if dest_rel.startswith('scripts/'):
+            os.chmod(dest, 0o755)
     print(f'Assets extracted to {target}/')
 
 
