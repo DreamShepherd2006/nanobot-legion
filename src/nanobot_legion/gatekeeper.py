@@ -45,6 +45,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse, Resp
 from starlette.middleware.sessions import SessionMiddleware
 import websockets
 from cloud_agent_gateway.channel_binding import discover as discover_bindings
+from cloud_agent_gateway import file_manager
 
 # ── Platform (auto-detected) ──
 # IMPORTANT: squad_config_loader must be imported BEFORE platforms!
@@ -205,6 +206,16 @@ Legion 多智能体编制管理。Commander (neo) 由初始化配置生成。
 👉 [`配置 Agent`](/config/agents)
 
 添加或管理 Worker Agent（名字、角色、模型），保存后**重启空间**生效。
+
+---
+
+# 📁 文件管理
+
+上传、下载、管理你的文件（PPTX、视频、文档等）：
+
+👉 [`/files`](/files)
+
+Agent 生成的输出文件存放在此，可随时下载。
 
 ---
 
@@ -1474,6 +1485,15 @@ def create_app() -> FastAPI:
 
     # ── Agent management routes ───────────────────────────────
     create_agent_routes(_app, gk)
+
+    # ── File manager routes ────────────────────────────────────
+    _app.get("/files")(file_manager.list_page)
+    _app.get("/files/")(file_manager.list_page)
+    _app.get("/files/view/{path:path}")(file_manager.view_file)
+    _app.post("/files/upload")(file_manager.upload_file)
+    _app.delete("/files/delete/{path:path}")(file_manager.delete_entry)
+    _app.post("/files/mkdir")(file_manager.mkdir)
+    _app.post("/files/touch")(file_manager.touch_file)
 
     # ── Wire routes ───────────────────────────────────────────
     _app.get("/health")(gk._handle_health)
