@@ -222,7 +222,8 @@ def sync_configs():
 
             if inst_name in squad:
                 cfg.setdefault("gateway", {})["port"] = squad[inst_name]["gateway_port"]
-                port_mark = f"→ gw={squad[inst_name]['gateway_port']}"
+                cfg.setdefault("channels", {}).setdefault("websocket", {})["port"] = squad[inst_name]["ws_port"]
+                port_mark = f"→ gw={squad[inst_name]['gateway_port']} ws={squad[inst_name]['ws_port']}"
             else:
                 port_mark = "(not in roster)"
 
