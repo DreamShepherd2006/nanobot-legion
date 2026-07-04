@@ -220,8 +220,9 @@ Legion 多智能体编制管理。Commander (neo) 由初始化配置生成。
 
 本项目基于以下开源组件构建：
 
-- **cloud-agent-gateway**: [DreamShepherd2006/cloud-agent-gateway](https://github.com/DreamShepherd2006/cloud-agent-gateway)
-- **nanobot**: [HKUDS/nanobot](https://github.com/HKUDS/nanobot)
+- **cloud-agent-gateway** (框架层): [DreamShepherd2006/cloud-agent-gateway](https://github.com/DreamShepherd2006/cloud-agent-gateway)
+- **nanobot-legion** (部署层): [DreamShepherd2006/nanobot-legion](https://github.com/DreamShepherd2006/nanobot-legion)
+- **nanobot** (AI 引擎): [HKUDS/nanobot](https://github.com/HKUDS/nanobot)
 
 部署方式：\n1. 将本空间的 Dockerfile 上传到你的 HuggingFace Space 或 ModelScope Studio\n2. 空间自动构建并启动，访问 Setup 页面完成初始化"""
 
@@ -704,6 +705,32 @@ Legion 多智能体编制管理。Commander (neo) 由初始化配置生成。
     async def _handle_health(self) -> dict:
         return {"status": "ok", "role": "gatekeeper",
                 "agents": len(self.agent_names)}
+
+    # ── Reset ─────────────────────────────────────────────────
+
+    async def _handle_reset_setup(self, request: Request) -> JSONResponse:
+        """GET /reset-setup — delete oauth.json to re-enter Phase 1 setup."""
+        from pathlib import Path
+        deleted = []
+        # Check multiple possible paths (HF vs MS, and edge cases)
+        candidates = [
+            Path(self._platform.data_root, "oauth.json"),
+            Path(self._platform.data_root, "instances", "oauth.json"),
+            Path("/data", "instances", "oauth.json"),
+            Path("/mnt/workspace", "oauth.json"),
+        ]
+        for p in candidates:
+            try:
+                p.unlink()
+                deleted.append(str(p))
+            except FileNotFoundError:
+                pass
+
+        if deleted:
+            msg = f"已删除: {', '.join(deleted)}。请重启空间进入 Setup 页面。"
+        else:
+            msg = "未找到 oauth.json（可能已被删除）。如需重新配置，请重启空间。"
+        return JSONResponse({"ok": True, "message": msg, "deleted": deleted})
 
     # ── Relay ──────────────────────────────────────────────────
 
@@ -1456,6 +1483,7 @@ def create_app() -> FastAPI:
     _app.get("/api/squad/sessions")(gk._handle_sessions)
     _app.api_route("/api/squad/sessions/{path:path}",
                    methods=["GET", "POST", "DELETE"])(gk._handle_sessions_sub)
+    _app.get("/reset-setup")(gk._handle_reset_setup)
     _app.get("/")(gk._handle_index)
     _app.api_route("/{path:path}",
                    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])(gk._handle_catch_all)
