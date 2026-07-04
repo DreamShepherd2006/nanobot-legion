@@ -25,7 +25,7 @@ def extract(target=TARGET):
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         with open(dest, 'w') as f:
             f.write(read_asset(src_name))
-        if dest_rel.startswith('scripts/'):
+        if dest_rel.startswith('scripts/') or dest_rel.endswith('.sh'):
             os.chmod(dest, 0o755)
     print(f'Assets extracted to {target}/')
 
