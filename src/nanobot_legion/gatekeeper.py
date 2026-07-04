@@ -1487,13 +1487,13 @@ def create_app() -> FastAPI:
     create_agent_routes(_app, gk)
 
     # ── File manager routes ────────────────────────────────────
-    _app.get("/files")(file_manager.list_page)
-    _app.get("/files/")(file_manager.list_page)
-    _app.get("/files/view/{path:path}")(file_manager.view_file)
-    _app.post("/files/upload")(file_manager.upload_file)
-    _app.delete("/files/delete/{path:path}")(file_manager.delete_entry)
-    _app.post("/files/mkdir")(file_manager.mkdir)
-    _app.post("/files/touch")(file_manager.touch_file)
+    _app.add_api_route("/files", file_manager.list_page, methods=["GET"], response_model=None)
+    _app.add_api_route("/files/", file_manager.list_page, methods=["GET"], response_model=None)
+    _app.add_api_route("/files/view/{path:path}", file_manager.view_file, methods=["GET"], response_model=None)
+    _app.add_api_route("/files/upload", file_manager.upload_file, methods=["POST"], response_model=None)
+    _app.add_api_route("/files/delete/{path:path}", file_manager.delete_entry, methods=["DELETE"], response_model=None)
+    _app.add_api_route("/files/mkdir", file_manager.mkdir, methods=["POST"], response_model=None)
+    _app.add_api_route("/files/touch", file_manager.touch_file, methods=["POST"], response_model=None)
 
     # ── Wire routes ───────────────────────────────────────────
     _app.get("/health")(gk._handle_health)
