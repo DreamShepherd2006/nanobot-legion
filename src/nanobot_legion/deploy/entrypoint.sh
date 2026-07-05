@@ -24,6 +24,24 @@ if [ ! -f /data/oauth.json ] && [ ! -f /mnt/workspace/oauth.json ]; then
     exec python3 -m cloud_agent_gateway.setup
 fi
 
+# ── 0b. OAuth: export credentials from oauth.json (Phase 1→2 bridge) ──
+for oauth_path in /data/oauth.json /mnt/workspace/oauth.json; do
+    if [ -f "$oauth_path" ]; then
+        eval $(python3 -c "
+import json, shlex
+with open('$oauth_path') as f:
+    o = json.load(f)
+cid = o.get('client_id', '')
+secret = o.get('client_secret', '')
+if cid and secret and 'OAUTH_CLIENT_ID' not in __import__('os').environ:
+    print(f'export OAUTH_CLIENT_ID={shlex.quote(cid)}')
+    print(f'export OAUTH_CLIENT_SECRET={shlex.quote(secret)}')
+")
+        echo "✅ OAuth: loaded from $oauth_path"
+        break
+    fi
+done
+
 # ── 1. Route to squad if Legion layer present ─────────────────────
 if [ -x /app/deploy/huggingface/launch.sh ]; then
     echo "🦁 Squad Legion layer detected — delegating to launch.sh"
