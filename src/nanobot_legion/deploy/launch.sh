@@ -6,36 +6,34 @@ set -e
 # ============================================================================
 
 # ── 0. 平台检测 → 自动选配 ──────────────────────────────────────
+# 绝大多数 Squad 空间统一用默认 squad_config.json。
+# Nightly 是唯一例外，需要独立的 relay token 映射。
 _choose_platform_config() {
-    local pf=""
-    # ModelScope: MODELSCOPE_ENVIRONMENT=studio
-    if [ "${MODELSCOPE_ENVIRONMENT:-}" = "studio" ]; then
-        pf="ms-staging"
-    # HF Staging: SPACE_ID 含 "nanobot-staging"
-    elif echo "${SPACE_ID:-}" | grep -qi "nanobot-staging"; then
-        pf="hf-staging"
-    # HF Nightly: SPACE_ID 含 "multi-agent-nightly"
-    elif echo "${SPACE_ID:-}" | grep -qi "multi-agent-nightly"; then
-        pf="hf-nightly"
-    fi
-
-    if [ -n "$pf" ] && [ -f "/app/squad_config.${pf}.json" ]; then
-        cp "/app/squad_config.${pf}.json" "/app/squad_config.json"
-        echo "📋 [Config] selected → squad_config.${pf}.json"
+    if echo "${SPACE_ID:-}" | grep -qi "multi-agent-nightly" \
+       && [ -f "/app/squad_config.hf-nightly.json" ]; then
+        cp "/app/squad_config.hf-nightly.json" "/app/squad_config.json"
+        echo "📋 [Config] selected → squad_config.hf-nightly.json"
     else
-        echo "📋 [Config] using default squad_config.json (platform: '${pf:-none}')"
+        echo "📋 [Config] using default squad_config.json"
     fi
 }
 _choose_platform_config
 
+# ── 0a. 自动判定 data_root ──────────────────────────────────────
+if [ "${MODELSCOPE_ENVIRONMENT:-}" = "studio" ]; then
+    export MOUNT_PATH="/mnt/workspace"
+elif [ "${HF_SPACE:-}" = "1" ]; then
+    export MOUNT_PATH="/data"
+else
+    # 未来平台：回退到 squad_config.json 预设值
+    export MOUNT_PATH=$(python3 -c "import json; print(json.load(open('/app/squad_config.json')).get('data_root', '/data'))")
+fi
+echo "📂 [Storage] data_root = $MOUNT_PATH"
+
 # ── 1. 基础环境配置 ──────────────────────────────────────────────
 export HOME="/home/nanobot"
 DIR="$HOME/.nanobot"
-
-# 从 seed config 读取 data_root
 SEED_CONFIG="/app/squad_config.json"
-export MOUNT_PATH=$(python3 -c "import json; print(json.load(open('$SEED_CONFIG')).get('data_root', '/data'))")
-echo "📂 [Storage] data_root = $MOUNT_PATH"
 
 # Storage-first: 首次启动时将 seed config 复制到持久化路径
 PERSIST_CONFIG="$MOUNT_PATH/squad_config.json"
@@ -45,6 +43,15 @@ if [ ! -f "$PERSIST_CONFIG" ]; then
 else
     echo "📋 [Config] 配置已就绪 ($PERSIST_CONFIG)"
 fi
+# 始终同步 data_root / dlq_dir（新平台 + 已有配置均生效）
+python3 -c "
+import json
+cfg = json.load(open('$PERSIST_CONFIG'))
+cfg['data_root'] = '$MOUNT_PATH'
+cfg['dlq_dir'] = '$MOUNT_PATH/dlq'
+json.dump(cfg, open('$PERSIST_CONFIG', 'w'), indent=2, ensure_ascii=False)
+print('   ✅ paths synced → data_root=$MOUNT_PATH')
+"
 export SQUAD_CONFIG_PATH="$PERSIST_CONFIG"
 
 export PATH="/home/nanobot/.local/bin:$PATH"

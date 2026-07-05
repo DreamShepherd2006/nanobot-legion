@@ -4,10 +4,10 @@ from nanobot_legion.deploy import read_asset
 
 TARGET = "/app"
 ASSETS = [
-    # Platform-specific squad configs
-    'squad_config.hf-staging.json',
+    # Default squad config (fallback for all spaces)
+    'squad_config.json',
+    # Platform-specific overrides
     'squad_config.hf-nightly.json',
-    'squad_config.ms-staging.json',
     # Agent template
     ('_template_config.json', 'instances/_template/config.json'),
     # Shell scripts
