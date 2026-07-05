@@ -8,6 +8,8 @@ ASSETS = [
     'squad_config.hf-staging.json',
     'squad_config.hf-nightly.json',
     'squad_config.ms-staging.json',
+    # Agent template
+    ('_template_config.json', 'instances/_template/config.json'),
     # Shell scripts
     ('launch.sh', 'deploy/huggingface/launch.sh'),
     'scripts/resurrect_neo.sh',
