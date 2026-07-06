@@ -31,5 +31,6 @@ nanobot_legion = [
     "deploy/*.json",
     "deploy/scripts/*.sh",
     "patched_files/**/*.py",
+    "vanilla_webui_dist/**/*",
     "webui_dist/**/*",
 ]

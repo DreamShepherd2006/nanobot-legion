@@ -6,9 +6,11 @@ Usage (in Dockerfile):
 
 Steps:
   1. Copy patched Python files → site-packages/nanobot/
-  2. Copy pre-built patched webui dist → site-packages/nanobot/web/dist/
-     (single-agent mode) AND /app/legion_webui/ (Legion mode via launch.sh)
-  3. Extract deploy assets (entrypoint.sh, launch.sh, configs, etc.)
+  2. Copy vanilla webui dist → site-packages/nanobot/web/dist/
+     (single-agent mode — official nanobot webui, no Legion patches)
+  3. Copy Legion-patched webui dist → /app/legion_webui/
+     (Legion mode — launch.sh symlinks at runtime)
+  4. Extract deploy assets (entrypoint.sh, launch.sh, configs, etc.)
 """
 
 import os
@@ -41,49 +43,54 @@ def _deploy_patched_python(nanobot_dir: Path, pkg_dir: Path) -> None:
 
 
 def _deploy_webui_dist(nanobot_dir: Path, pkg_dir: Path) -> None:
-    """Copy pre-built patched webui dist to two locations:
+    """Copy webui dists to the right locations:
 
-    1. site-packages/nanobot/web/dist/  — used by single-agent mode
-    2. /app/legion_webui/               — symlinked by launch.sh in Legion mode
+    1. Vanilla nanobot webui → site-packages/nanobot/web/dist/
+       Used by single-agent mode.  Official nanobot wheel includes this
+       dist but the fork (DreamShepherd2006/nanobot) does not, so we
+       bundle a pre-extracted copy.
 
-    The nanobot fork does not ship a built frontend, so the patched dist is
-    the only webui available.  Both modes receive the same dist; the Legion
-    webui includes LegionTerminal/Roster which are inactive outside squad
-    mode, and pinned sidebar keys work identically in both modes.
+    2. Legion-patched webui  → /app/legion_webui/
+       Used by Legion mode (launch.sh symlinks at runtime).  Includes
+       LegionRoster / LegionTerminal and ModelScope token injection.
     """
-    src = pkg_dir / "webui_dist"
-
-    if not src.is_dir() or not any(src.iterdir()):
-        print("  ⚠️  webui_dist empty — skipping")
-        return
-
-    # Target 1: site-packages (single-agent mode)
+    # Target 1: vanilla webui → site-packages
+    vanilla_src = pkg_dir / "vanilla_webui_dist"
     dst_site = nanobot_dir / "web" / "dist"
-    if dst_site.exists():
-        shutil.rmtree(dst_site)
-    dst_site.mkdir(parents=True, exist_ok=True)
-    for item in src.iterdir():
-        d = dst_site / item.name
-        if item.is_dir():
-            shutil.copytree(item, d)
-        else:
-            shutil.copy2(item, d)
-    n_site = sum(1 for _ in dst_site.rglob("*") if _.is_file())
-    print(f"  ✅ webui dist → {dst_site} ({n_site} files)")
 
-    # Target 2: /app/legion_webui/ (Legion mode, launch.sh symlink)
+    if vanilla_src.is_dir() and any(vanilla_src.iterdir()):
+        if dst_site.exists():
+            shutil.rmtree(dst_site)
+        dst_site.mkdir(parents=True, exist_ok=True)
+        for item in vanilla_src.iterdir():
+            d = dst_site / item.name
+            if item.is_dir():
+                shutil.copytree(item, d)
+            else:
+                shutil.copy2(item, d)
+        n_site = sum(1 for _ in dst_site.rglob("*") if _.is_file())
+        print(f"  ✅ vanilla webui → {dst_site} ({n_site} files)")
+    else:
+        print("  ⚠️  vanilla_webui_dist empty — single-agent webui not available")
+
+    # Target 2: Legion-patched webui → /app/legion_webui/
+    legion_src = pkg_dir / "webui_dist"
     dst_app = Path("/app/legion_webui")
-    if dst_app.exists():
-        shutil.rmtree(dst_app)
-    dst_app.mkdir(parents=True, exist_ok=True)
-    for item in src.iterdir():
-        d = dst_app / item.name
-        if item.is_dir():
-            shutil.copytree(item, d)
-        else:
-            shutil.copy2(item, d)
-    n_app = sum(1 for _ in dst_app.rglob("*") if _.is_file())
-    print(f"  ✅ webui dist → {dst_app} ({n_app} files)")
+
+    if legion_src.is_dir() and any(legion_src.iterdir()):
+        if dst_app.exists():
+            shutil.rmtree(dst_app)
+        dst_app.mkdir(parents=True, exist_ok=True)
+        for item in legion_src.iterdir():
+            d = dst_app / item.name
+            if item.is_dir():
+                shutil.copytree(item, d)
+            else:
+                shutil.copy2(item, d)
+        n_app = sum(1 for _ in dst_app.rglob("*") if _.is_file())
+        print(f"  ✅ legion webui → {dst_app} ({n_app} files)")
+    else:
+        print("  ⚠️  webui_dist empty — Legion webui not available")
 
 
 def main() -> None:
