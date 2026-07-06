@@ -191,10 +191,10 @@ echo "[$(date '+%H:%M:%S')] 🚀 gatekeeper 通道初始化完毕" > "$HOME/gate
 # 单 agent 模式不执行 launch.sh，因此保留原版 webui（sidebar pin ✅）。
 _WEBUI_SRC="/app/legion_webui"
 _WEBUI_DST=$(python3 -c "
-import importlib.resources, os
+import importlib.resources
 try:
-    d = os.path.dirname(importlib.resources.files('nanobot'))
-    print(os.path.join(d, 'web', 'dist'))
+    d = importlib.resources.files('nanobot')
+    print(str(d / 'web' / 'dist'))
 except Exception:
     import nanobot, pathlib
     print(pathlib.Path(nanobot.__file__).parent / 'web' / 'dist')

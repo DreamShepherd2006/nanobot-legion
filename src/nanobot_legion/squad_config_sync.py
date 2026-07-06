@@ -173,7 +173,7 @@ def sync_configs():
                     cfg = deepcopy(template)
                     cfg["gateway"]["port"] = info["gateway_port"]
                     cfg["channels"]["websocket"]["port"] = info["ws_port"]
-                    cfg["agents"]["defaults"]["instructions"] = (
+                    cfg.setdefault("agents", {}).setdefault("defaults", {})["instructions"] = (
                         f"【{name.upper()}】Squad agent {name}. "
                         f"Configure your role via Web UI."
                     )
