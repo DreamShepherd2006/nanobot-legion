@@ -186,7 +186,30 @@ for var in $(env | grep '^NANOBOT_PEER_' | cut -d= -f1); do
 done
 echo "[$(date '+%H:%M:%S')] 🚀 gatekeeper 通道初始化完毕" > "$HOME/gatekeeper.log"
 
-# ── 10. Agent 启动 ─────────────────────────────────────────────────
+# ── 10. 激活 Legion WebUI ──────────────────────────────────────────
+# 将 /app/legion_webui/ 软链接到 nanobot 的 web/dist，替换原版 webui。
+# 单 agent 模式不执行 launch.sh，因此保留原版 webui（sidebar pin ✅）。
+_WEBUI_SRC="/app/legion_webui"
+_WEBUI_DST=$(python3 -c "
+import importlib.resources, os
+try:
+    d = os.path.dirname(importlib.resources.files('nanobot'))
+    print(os.path.join(d, 'web', 'dist'))
+except Exception:
+    import nanobot, pathlib
+    print(pathlib.Path(nanobot.__file__).parent / 'web' / 'dist')
+")
+if [ -d "$_WEBUI_SRC" ]; then
+    if [ -d "$_WEBUI_DST" ] || [ -L "$_WEBUI_DST" ]; then
+        rm -rf "$_WEBUI_DST"
+    fi
+    ln -sfn "$_WEBUI_SRC" "$_WEBUI_DST"
+    echo "🎨 [Legion] WebUI activated → $_WEBUI_DST"
+else
+    echo "⚠️  [Legion] $_WEBUI_SRC not found — keeping original webui"
+fi
+
+# ── 11. Agent 启动 ─────────────────────────────────────────────────
 launch_agent() {
     local name=$1
     local port=$2
@@ -239,7 +262,7 @@ for var in $(env | grep '^NANOBOT_PEER_' | cut -d= -f1); do
     fi
 done
 
-# ── 11. Gatekeeper ──────────────────────────────────────────────────
+# ── 12. Gatekeeper ──────────────────────────────────────────────────
 echo "🛡️ 启动 Gatekeeper 调度服务..."
 sleep 8
 

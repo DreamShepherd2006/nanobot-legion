@@ -60,5 +60,7 @@ fi
 
 # ── 2. Single-agent Phase 2 → template_launch ─────────────────────
 #     Handles platform detection, storage seeding, gateway + oauth_proxy internally.
+#     Export DATA_ROOT so template_launch uses correct path (not from baked-in squad_config).
 echo "☁️  Single-agent mode — launching via template_launch"
+export DATA_ROOT
 exec python3 -m cloud_agent_gateway.template_launch

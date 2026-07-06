@@ -6,7 +6,8 @@ Usage (in Dockerfile):
 
 Steps:
   1. Copy patched Python files → site-packages/nanobot/
-  2. Copy pre-built patched webui dist → site-packages/nanobot/web/dist/
+  2. Copy pre-built patched webui dist → /app/legion_webui/ (not overwriting
+     nanobot's original; launch.sh symlinks at runtime for Legion mode)
   3. Extract deploy assets (entrypoint.sh, launch.sh, configs, etc.)
 """
 
@@ -39,10 +40,15 @@ def _deploy_patched_python(nanobot_dir: Path, pkg_dir: Path) -> None:
     print("  ✅ patched Python files deployed")
 
 
-def _deploy_webui_dist(nanobot_dir: Path, pkg_dir: Path) -> None:
-    """Copy pre-built patched webui dist to site-packages."""
+def _deploy_webui_dist(pkg_dir: Path) -> None:
+    """Copy pre-built patched webui dist to /app/legion_webui/.
+
+    Deploys to a neutral location instead of overwriting nanobot's original
+    web/dist, so single-agent mode (which doesn't run launch.sh) keeps the
+    original webui with correct sidebar pinning.
+    """
     src = pkg_dir / "webui_dist"
-    dst = nanobot_dir / "web" / "dist"
+    dst = Path("/app/legion_webui")
 
     if not src.is_dir() or not any(src.iterdir()):
         print("  ⚠️  webui_dist empty — skipping")
@@ -60,7 +66,7 @@ def _deploy_webui_dist(nanobot_dir: Path, pkg_dir: Path) -> None:
             shutil.copy2(item, d)
 
     n_files = sum(1 for _ in dst.rglob("*") if _.is_file())
-    print(f"  ✅ webui dist deployed ({n_files} files)")
+    print(f"  ✅ webui dist deployed → {dst} ({n_files} files)")
 
 
 def main() -> None:
@@ -77,7 +83,7 @@ def main() -> None:
     pkg_dir = Path(nanobot_legion.__file__).parent
 
     _deploy_patched_python(nanobot_dir, pkg_dir)
-    _deploy_webui_dist(nanobot_dir, pkg_dir)
+    _deploy_webui_dist(pkg_dir)
 
     from nanobot_legion.deploy.extract_assets import extract
     extract()
