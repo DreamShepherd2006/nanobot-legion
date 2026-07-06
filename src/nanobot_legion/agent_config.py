@@ -2,6 +2,7 @@
 """Agent Management — 配置中心：Worker Agent 增删。
 
 Mounted by gatekeeper.py at Phase 2; serves GET/POST under /config/agents.
+Provider 列表来自 nanobot 官方 ``providers/registry.py``，自动跟随上游更新。
 """
 from __future__ import annotations
 
@@ -10,6 +11,80 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
 from .squad_config_loader import load_config, _get_config_path
+
+# ── provider registry (from official nanobot) ───────────────────────
+try:
+    from nanobot.providers.registry import PROVIDERS as _NANOBOT_PROVIDERS, find_by_name
+except ImportError:  # pragma: no cover
+    _NANOBOT_PROVIDERS = ()
+    def find_by_name(name: str):  # noqa: E302
+        return None
+
+# ── UX augmentation ──────────────────────────────────────────────────
+_PROVIDER_MODELS: dict[str, list[str]] = {
+    "deepseek":    ["deepseek-chat", "deepseek-reasoner"],
+    "openai":      ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "o4-mini"],
+    "siliconflow": ["deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1", "Qwen/Qwen3-235B-A22B"],
+    "zhipu":       ["glm-4-plus", "glm-4-flash", "glm-4-air"],
+    "dashscope":   ["qwen3-235b-a22b", "qwen-max", "qwen-plus"],
+    "moonshot":    ["kimi-k2.5", "kimi-k2.6"],
+    "gemini":      ["gemini-2.5-flash", "gemini-2.5-pro"],
+    "mistral":     ["mistral-large-latest", "mistral-small-latest"],
+    "anthropic":   ["claude-sonnet-4-20250514", "claude-haiku-3.5"],
+    "volcengine":  ["deepseek-v3-250324", "deepseek-r1-250528"],
+    "stepfun":     ["step-3"],
+    "minimax":     ["minimax-m1"],
+    "qianfan":     ["ernie-4.5-8k", "ernie-speed-8k"],
+    "novita":      ["deepseek-r1", "deepseek-v3"],
+    "openrouter":  ["openai/gpt-4o-mini"],
+    "aihubmix":    ["deepseek-chat"],
+    "groq":        ["llama-3.3-70b-versatile"],
+    "huggingface": ["Qwen/Qwen3-235B-A22B"],
+}
+
+_SKIP_PROVIDERS = frozenset({"bedrock", "azure_openai", "ovms", "nvidia",
+                               "openai_codex", "github_copilot",
+                               "minimax_anthropic",
+                               "volcengine_coding_plan", "byteplus_coding_plan"})
+
+
+def _get_setup_providers() -> list:
+    """Return nanobot ProviderSpec list filtered for the agent config form."""
+    result = []
+    for spec in _NANOBOT_PROVIDERS:
+        if spec.is_oauth or spec.is_local:
+            continue
+        if spec.name in _SKIP_PROVIDERS:
+            continue
+        result.append(spec)
+    return result
+
+
+def _build_provider_js_data() -> tuple[str, str]:
+    """Generate provider <option> HTML and JS presets object.
+
+    Returns (provider_options_html, presets_js).
+    """
+    select_lines = ['            <option value="">— 选择服务商 —</option>']
+    p_entries = []
+
+    for spec in _get_setup_providers():
+        select_lines.append(f'            <option value="{spec.name}">{spec.label}</option>')
+
+        models = _PROVIDER_MODELS.get(spec.name, [])
+        base = spec.default_api_base or ""
+        p_entries.append(
+            f'    {spec.name}:{{base:"{base}",ml:{json.dumps(models)}}}'
+        )
+
+    # custom provider
+    select_lines.append('            <option value="custom">自定义 (OpenAI 兼容)</option>')
+    p_entries.append('    custom:{base:"",ml:[]}')
+
+    options_html = "\n".join(select_lines)
+    presets_js = "var __PP = {\n" + ",\n".join(p_entries) + "\n};"
+
+    return options_html, presets_js
 
 _AGENT_CONFIG_TEMPLATE = """\
 {
@@ -91,10 +166,23 @@ _HTML = r"""\
     <small style="color:#999">描述这个 agent 的职责，将写入 AGENTS.md 作为系统提示词</small>
   </div>
   <div class="form-group">
+    <label for="provider">模型服务商 / Provider</label>
+    <select id="provider" name="provider" required>
+{provider_options}
+    </select>
+    <small style="color:#999">选择 API 服务商，不同 agent 可使用不同 provider</small>
+  </div>
+  <div class="form-group">
     <label for="model">模型</label>
     <select id="model" name="model" required>
-{model_options}
+      <option value="">— 先选择服务商 —</option>
     </select>
+    <small style="color:#999">也可手动输入模型名（选择「自定义」后在此输入）</small>
+  </div>
+  <div class="form-group">
+    <label for="api_key">API Key</label>
+    <input id="api_key" name="api_key" type="password" placeholder="为此 agent 单独设置 API Key（留空则继承 Commander 的 key）">
+    <small style="color:#999">留空时 worker agent 使用 Commander (neo) 的 API Key</small>
   </div>
   <button type="submit">添加</button>
   <div id="result"></div>
@@ -106,6 +194,47 @@ _HTML = r"""\
 </div>
 
 <script>
+// -- provider presets (generated from nanobot official registry) --
+{provider_presets_js}
+
+var elProvider = document.getElementById('provider');
+var elModel = document.getElementById('model');
+
+// -- pre-fill from Commander config --
+var __neo_provider = '{neo_provider_id}';
+var __neo_api_key = '{neo_api_key}';
+
+// Populate model options when provider changes
+elProvider.addEventListener('change', function() {
+  var p = __PP[this.value];
+  var opts = ['<option value="">— 选择模型 —</option>'];
+  if (p) {
+    var models = p.ml || [];
+    for (var i = 0; i < models.length; i++) {
+      opts.push('<option value="' + models[i] + '">' + models[i] + '</option>');
+    }
+  }
+  elModel.innerHTML = opts.join('');
+
+  // Pre-fill api_key if same as neo's provider
+  var ak = document.getElementById('api_key');
+  if (this.value === __neo_provider && !ak.value) {
+    ak.value = __neo_api_key;
+    ak.placeholder = '(继承 Commander 的 API Key)';
+  } else if (this.value && this.value !== __neo_provider) {
+    ak.placeholder = '为此 agent 单独设置 API Key';
+  }
+});
+
+// On page load: select neo's provider by default
+(function init() {
+  if (__neo_provider) {
+    elProvider.value = __neo_provider;
+    elProvider.dispatchEvent(new Event('change'));
+  }
+})();
+
+// Form submit
 document.getElementById('addForm').addEventListener('submit', async function(e) {
   e.preventDefault();
   const result = document.getElementById('result');
@@ -113,7 +242,9 @@ document.getElementById('addForm').addEventListener('submit', async function(e) 
   const formData = {
     name: document.getElementById('name').value.trim(),
     role: document.getElementById('role').value.trim(),
-    model: document.getElementById('model').value
+    provider: document.getElementById('provider').value,
+    model: document.getElementById('model').value,
+    api_key: document.getElementById('api_key').value.trim()
   };
   try {
     const resp = await fetch('/config/agents/add', {
@@ -140,28 +271,61 @@ document.getElementById('addForm').addEventListener('submit', async function(e) 
 
 # ── Logic ──────────────────────────────────────────────────
 
-def _parse_providers(neo_config: dict) -> tuple[str, str, list[dict]]:
-    """Extract default provider_id and model from neo config, plus all model options."""
-    agents = neo_config.get("agents", {})
+def _get_neo_config(squad_cfg: dict) -> dict:
+    """Load neo's config.json. Returns empty dict on failure."""
+    data_root = squad_cfg.get("data_root", "/data")
+    neo_config_path = os.path.join(data_root, "instances", "neo", "config.json")
+    try:
+        with open(neo_config_path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _get_neo_provider_info(neo_cfg: dict) -> tuple[str, str, str]:
+    """Extract (provider_id, api_key, api_base) from neo config."""
+    agents = neo_cfg.get("agents", {})
     defaults = agents.get("defaults", {}) if isinstance(agents, dict) else {}
     provider_id = defaults.get("provider", "")
-    default_model = defaults.get("model", "")
-    providers = neo_config.get("providers", {})
-    if isinstance(providers, dict):
+    providers = neo_cfg.get("providers", {})
+    if isinstance(providers, dict) and provider_id:
         prov = providers.get(provider_id, {})
-    else:
-        prov = {}
-    models = prov.get("models", []) if isinstance(prov, dict) else []
-    if not models:
-        models = [default_model] if default_model else ["gpt-4o"]
-    options = []
-    for m in models:
-        if isinstance(m, str):
-            options.append({"id": provider_id, "model": m, "label": f"{provider_id} / {m}"})
-        elif isinstance(m, dict):
-            mid = m.get("id", m.get("model", str(m)))
-            options.append({"id": provider_id, "model": mid, "label": f"{provider_id} / {mid}"})
-    return provider_id, default_model, options
+        if isinstance(prov, dict):
+            api_key = prov.get("api_key", "")
+            api_base = prov.get("api_base", "")
+            return provider_id, api_key, api_base
+    return provider_id, "", ""
+
+
+def _build_worker_providers(provider_id: str, model_id: str, api_key: str,
+                            neo_providers: dict) -> dict:
+    """Build providers dict for worker agent config.
+
+    Uses official ProviderSpec for default_api_base when provider is
+    in the nanobot registry. Falls back to neo's api_base if same provider.
+    """
+    spec = find_by_name(provider_id)
+    api_base = ""
+    if spec is not None and spec.default_api_base:
+        api_base = spec.default_api_base
+    elif provider_id in neo_providers:
+        neo_p = neo_providers[provider_id]
+        if isinstance(neo_p, dict):
+            api_base = neo_p.get("api_base", "")
+
+    # API key: use worker's own key, fallback to neo's
+    key = api_key
+    if not key and provider_id in neo_providers:
+        neo_p = neo_providers[provider_id]
+        if isinstance(neo_p, dict):
+            key = neo_p.get("api_key", "")
+
+    return {
+        provider_id: {
+            "api_key": key,
+            "api_base": api_base,
+        }
+    }
 
 
 def _render_agent_table(squad_config: dict, neo_config: dict) -> str:
@@ -183,7 +347,7 @@ def _render_agent_table(squad_config: dict, neo_config: dict) -> str:
 
 
 def _render_model_options(options: list[dict]) -> str:
-    """Render <option> tags for model dropdown."""
+    """Render <option> tags for model dropdown. (Kept for backward compat.)"""
     if not options:
         return '<option value="">(未找到可用模型)</option>'
     lines = []
@@ -191,6 +355,11 @@ def _render_model_options(options: list[dict]) -> str:
         selected = ' selected' if i == 0 else ''
         lines.append(f'        <option value="{opt["id"]}:{opt["model"]}"{selected}>{opt["label"]}</option>')
     return "\n".join(lines)
+
+
+def _escape_js(s: str) -> str:
+    """Escape a string for safe embedding in JS single-quoted string."""
+    return s.replace("\\", "\\\\").replace("'", "\\'")
 
 
 def _allocate_ports(peers: dict) -> tuple[int, int]:
@@ -227,24 +396,20 @@ def create_agent_routes(app, gatekeeper):
         if not _user:
             from starlette.responses import RedirectResponse
             return RedirectResponse("/")
-        
+
         squad_cfg = load_config(force_reload=True)
-        
-        # Read neo's config to get provider/model info
-        data_root = squad_cfg.get("data_root", "/data")
-        neo_config_path = os.path.join(data_root, "instances", "neo", "config.json")
-        neo_cfg = {}
-        try:
-            with open(neo_config_path) as f:
-                neo_cfg = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
-        
+        neo_cfg = _get_neo_config(squad_cfg)
+        neo_provider_id, neo_api_key, _ = _get_neo_provider_info(neo_cfg)
+
         agent_table = _render_agent_table(squad_cfg, neo_cfg)
-        _, _, options = _parse_providers(neo_cfg)
-        model_options = _render_model_options(options)
-        
-        html = _HTML.replace("{agent_table}", agent_table).replace("{model_options}", model_options)
+        provider_opts, presets_js = _build_provider_js_data()
+
+        html = (_HTML
+                .replace("{agent_table}", agent_table)
+                .replace("{provider_options}", provider_opts)
+                .replace("{provider_presets_js}", presets_js)
+                .replace("{neo_provider_id}", _escape_js(neo_provider_id))
+                .replace("{neo_api_key}", _escape_js(neo_api_key)))
         return HTMLResponse(html)
 
     async def _add_agent(request: Request):
@@ -252,16 +417,18 @@ def create_agent_routes(app, gatekeeper):
         _user = request.session.get("user")
         if not _user:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
-        
+
         try:
             body = await request.json()
         except Exception:
             return JSONResponse({"ok": False, "error": "无效的请求格式"}, status_code=400)
-        
+
         name = (body.get("name", "") or "").strip().lower()
         role = (body.get("role", "") or "").strip()
-        model_sel = (body.get("model", "") or "").strip()
-        
+        provider_id = (body.get("provider", "") or "").strip()
+        model_id = (body.get("model", "") or "").strip()
+        api_key = (body.get("api_key", "") or "").strip()
+
         # Validate
         if not name:
             return JSONResponse({"ok": False, "error": "名字不能为空"}, status_code=400)
@@ -273,46 +440,40 @@ def create_agent_routes(app, gatekeeper):
             return JSONResponse({"ok": False, "error": "neo 是保留的 Commander 名字，不可用作 Worker"}, status_code=400)
         if not role:
             return JSONResponse({"ok": False, "error": "角色说明不能为空"}, status_code=400)
-        
-        # Parse model selection: "provider_id:model_id"
-        provider_id = ""
-        model_id = ""
-        if ":" in model_sel:
-            provider_id, model_id = model_sel.split(":", 1)
-        else:
-            model_id = model_sel
-        
+        if not provider_id:
+            return JSONResponse({"ok": False, "error": "请选择服务商"}, status_code=400)
+        if not model_id:
+            return JSONResponse({"ok": False, "error": "请选择或输入模型"}, status_code=400)
+
+        # Verify provider exists in registry (or is "custom")
+        if provider_id != "custom" and find_by_name(provider_id) is None:
+            return JSONResponse({"ok": False, "error": f"未知服务商: {provider_id}"}, status_code=400)
+
         # Load current squad config
         squad_cfg = load_config(force_reload=True)
         peers = squad_cfg.get("peers", {})
-        
+
         if name in peers:
             return JSONResponse({"ok": False, "error": f"Agent '{name}' 已存在"}, status_code=409)
-        
-        # Read neo config for providers
-        data_root = squad_cfg.get("data_root", "/data")
-        neo_config_path = os.path.join(data_root, "instances", "neo", "config.json")
-        neo_cfg = {}
-        try:
-            with open(neo_config_path) as f:
-                neo_cfg = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
+
+        # Read neo config for fallback providers
+        neo_cfg = _get_neo_config(squad_cfg)
+        if not neo_cfg:
             return JSONResponse({"ok": False, "error": "无法读取 neo 配置，请确保 Commander 已初始化"}, status_code=500)
-        
-        providers = neo_cfg.get("providers", {})
-        if not provider_id and providers:
-            provider_id = next(iter(providers.keys()))
-        if not model_id and providers:
-            prov = providers.get(provider_id, {})
-            models = prov.get("models", []) if isinstance(prov, dict) else []
-            model_id = models[0] if models else "gpt-4o"
-        
+
+        neo_providers = neo_cfg.get("providers", {})
+
         # Allocate ports
         gw, ws = _allocate_ports(peers)
-        
-        # Generate agent config (use str.replace to avoid .format() brace conflicts)
+
+        # Build providers section for this worker
+        worker_providers = _build_worker_providers(
+            provider_id, model_id, api_key, neo_providers
+        )
+
+        # Generate agent config
         instructions_json = json.dumps(role, ensure_ascii=False)
-        providers_str = json.dumps(providers, ensure_ascii=False, indent=2)
+        providers_str = json.dumps(worker_providers, ensure_ascii=False, indent=2)
         agent_config_json = (_AGENT_CONFIG_TEMPLATE
             .replace("$PROVIDER$", provider_id)
             .replace("$MODEL$", model_id)
@@ -321,9 +482,9 @@ def create_agent_routes(app, gatekeeper):
             .replace("$GW_PORT$", str(gw))
             .replace("$WS_PORT$", str(ws))
         )
-        
+
         # Write agent config
-        agent_dir = os.path.join(data_root, "instances", name)
+        agent_dir = os.path.join(squad_cfg.get("data_root", "/data"), "instances", name)
         os.makedirs(agent_dir, exist_ok=True)
         config_path = os.path.join(agent_dir, "config.json")
         try:
@@ -332,7 +493,7 @@ def create_agent_routes(app, gatekeeper):
             os.chmod(config_path, 0o600)
         except OSError as e:
             return JSONResponse({"ok": False, "error": f"无法写入配置: {e}"}, status_code=500)
-        
+
         # Write AGENTS.md
         agents_md = f"# {name}\n\n{role}\n"
         try:
@@ -340,7 +501,7 @@ def create_agent_routes(app, gatekeeper):
                 f.write(agents_md)
         except OSError:
             pass
-        
+
         # Write MEMORY.md placeholder
         try:
             memory_dir = os.path.join(agent_dir, "memory")
@@ -349,24 +510,23 @@ def create_agent_routes(app, gatekeeper):
                 f.write(f"# {name} Memory\n\n*Work in progress.*\n")
         except OSError:
             pass
-        
+
         # Update squad_config.json (persistent copy)
         peers[name] = {"id": f"squad:{name}", "gateway_port": gw, "ws_port": ws}
         squad_cfg["peers"] = peers
-        
-        config_path = _get_config_path()
+
+        config_path_sc = _get_config_path()
         try:
-            with open(config_path, "w") as f:
+            with open(config_path_sc, "w") as f:
                 json.dump(squad_cfg, f, indent=2, ensure_ascii=False)
         except OSError as e:
-            # Config written, but squad_config update failed — partial success
             return JSONResponse(
                 {"ok": True, "msg": f"Agent '{name}' 配置已创建 (端口 {gw}/{ws})，但 squad_config 更新失败: {e}。请手动添加 peer 或重启后用 /reset-setup 重建。"},
                 status_code=201
             )
-        
+
         return JSONResponse(
-            {"ok": True, "msg": f"Agent '{name}' 已添加 (网关: {gw}, WS: {ws})，重启空间后生效"},
+            {"ok": True, "msg": f"Agent '{name}' 已添加 (网关: {gw}, WS: {ws}, provider: {provider_id})，重启空间后生效"},
             status_code=201
         )
 
