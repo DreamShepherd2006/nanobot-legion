@@ -200,9 +200,10 @@ except Exception:
     print(pathlib.Path(nanobot.__file__).parent / 'web' / 'dist')
 ")
 if [ -d "$_WEBUI_SRC" ]; then
-    if [ -d "$_WEBUI_DST" ] || [ -L "$_WEBUI_DST" ]; then
-        rm -rf "$_WEBUI_DST"
-    fi
+    # Only remove if it's a plain directory or broken symlink — safe to skip
+    # if files are root-owned (pip install ran as root, launch.sh runs as nanobot).
+    rm -rf "$_WEBUI_DST" 2>/dev/null || true
+    mkdir -p "$(dirname "$_WEBUI_DST")"
     ln -sfn "$_WEBUI_SRC" "$_WEBUI_DST"
     echo "🎨 [Legion] WebUI activated → $_WEBUI_DST"
 else
