@@ -52,6 +52,7 @@ from cloud_agent_gateway.channel_binding import discover as discover_bindings
 # platforms.__init__._detect() reads in its matches() step 0.
 from squad_config_loader import get_relay_timeout  # noqa: E402
 from cloud_agent_gateway.platforms import platform  # noqa: E402
+from agent_config import create_agent_routes  # noqa: E402
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -167,15 +168,15 @@ class Gatekeeper:
             self._log("📌 无可用的绑定通道，跳过 pinned chat")
             return
 
-        import os as _os, json as _json, uuid as _uuid, time as _time
+        import uuid as _uuid, time as _time
 
-        _BINDING_TITLE = "社交通道配置提示"
-        _instance_dir = self._platform.instance_path(self.webui_agent)
-        # sessions are under workspace/sessions (SessionManager stores at workspace/sessions/)
-        _sessions_dir = f"{_instance_dir}/workspace/sessions"
-        _webui_dir = f"{_instance_dir}/webui"
-        _sidebar_path = f"{_webui_dir}/sidebar-state.json"
+        # Match oauth_proxy.py constants — keep in sync with cloud-agent-gateway
+        _BINDING_CHAT_TITLE = "社交通道配置指南"
+        _LEGACY_BINDING_TITLES = ["社交通道配置提示"]
+        _BINDING_PROJECT = "系统配置"
+        _agent = self.webui_agent
         _now = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+        _project_dir = f"{self._platform.data_root}/{_BINDING_PROJECT}"
 
         # Generate binding links (same format as Cloud Demo oauth_proxy.py)
         _rows = "\n".join(
@@ -183,6 +184,7 @@ class Gatekeeper:
             for _spec in _bindings
         )
 
+        # Build content matching oauth_proxy.py BINDING_CHAT_CONTENT structure
         _content = f"""\
 # 📱 社交通道配置
 
@@ -191,84 +193,94 @@ class Gatekeeper:
 | 通道 | 操作 |
 |------|------|
 {_rows}
-👆 点击上方链接即可操作，无需在此聊天。"""
 
-        # Clean up old binding sessions
-        if _os.path.exists(_sidebar_path):
-            try:
-                with open(_sidebar_path) as _f:
-                    _state = _json.load(_f) or {}
-                _new_pinned = []
-                _changed = False
-                for _pk in _state.get("pinned_keys", []):
-                    if not isinstance(_pk, str) or not _pk.startswith("websocket:"):
-                        _new_pinned.append(_pk)
-                        continue
-                    _cid = _pk.split(":", 1)[1]
-                    _sp = f"{_sessions_dir}/websocket_{_cid}.jsonl"
-                    if _os.path.exists(_sp):
-                        try:
-                            with open(_sp) as _sf:
-                                _first = _json.loads(_sf.readline())
-                            if _first.get("metadata", {}).get("title") == _BINDING_TITLE:
-                                _os.unlink(_sp)
-                                _tp = f"{_webui_dir}/websocket_{_cid}.jsonl"
-                                if _os.path.exists(_tp):
-                                    _os.unlink(_tp)
-                                _changed = True
-                                continue
-                        except Exception:
-                            pass
-                    _new_pinned.append(_pk)
-                if _changed:
-                    _state["pinned_keys"] = _new_pinned
-                    _state["updated_at"] = _now
-                    with open(_sidebar_path, "w") as _f:
-                        _json.dump(_state, _f, ensure_ascii=False, indent=2)
-                        _f.write("\n")
-            except Exception as _e:
-                self._log(f"⚠️ binding session cleanup: {_e}")
+👆 点击上方链接即可操作，无需在此聊天。
+
+---
+
+# 🤖 Agent 管理
+
+Legion 多智能体编制管理。Commander (neo) 由初始化配置生成。
+
+👉 [`配置 Agent`](/config/agents)
+
+添加或管理 Worker Agent（名字、角色、模型），保存后**重启空间**生效。
+
+---
+
+# ⚙️ 系统重置
+
+如需重新配置 OAuth 登录凭证（API Key / 模型配置会保留并自动预填），访问：
+
+👉 [`/reset-setup`](/reset-setup)
+
+---
+
+# 📦 开源代码
+
+本项目基于以下开源组件构建：
+
+- **cloud-agent-gateway**: [DreamShepherd2006/cloud-agent-gateway](https://github.com/DreamShepherd2006/cloud-agent-gateway)
+- **nanobot**: [HKUDS/nanobot](https://github.com/HKUDS/nanobot)
+
+部署方式：\n1. 将本空间的 Dockerfile 上传到你的 HuggingFace Space 或 ModelScope Studio\n2. 空间自动构建并启动，访问 Setup 页面完成初始化"""
+
+        # Clean up old binding sessions — matches both current and legacy titles
+        _state = self._platform.read_sidebar_state(_agent)
+        _new_pinned = []
+        _changed = False
+        for _pk in _state.get("pinned_keys", []):
+            if not isinstance(_pk, str) or not _pk.startswith("websocket:"):
+                _new_pinned.append(_pk)
+                continue
+            _cid = _pk.split(":", 1)[1]
+            _lines = self._platform.read_session(_agent, _cid)
+            if _lines:
+                _title = _lines[0].get("metadata", {}).get("title", "")
+                if _title == _BINDING_CHAT_TITLE or _title in _LEGACY_BINDING_TITLES:
+                    self._platform.delete_session(_agent, _cid)
+                    _changed = True
+                    continue
+            _new_pinned.append(_pk)
+        if _changed:
+            _state["pinned_keys"] = _new_pinned
+            _state["updated_at"] = _now
+            self._platform.write_sidebar_state(_agent, _state)
 
         # Create new binding session
         _cid = str(_uuid.uuid4())
         _key = f"websocket:{_cid}"
-        _fpath = f"{_sessions_dir}/websocket_{_cid}.jsonl"
-        _os.makedirs(_sessions_dir, exist_ok=True)
 
-        with open(_fpath, "w") as _f:
-            _f.write(_json.dumps({
+        import os as _os
+        _os.makedirs(_project_dir, exist_ok=True)
+        self._platform.write_session(_agent, _cid, [
+            {
                 "_type": "metadata", "key": _key,
                 "created_at": _now, "updated_at": _now,
-                "metadata": {"title": _BINDING_TITLE, "webui": True},
+                "metadata": {"title": _BINDING_CHAT_TITLE, "webui": True,
+                            "workspace_scope": {"project_path": _project_dir},
+                            "_binding_type": "system_config"},
                 "last_consolidated": 0,
-            }, ensure_ascii=False) + "\n")
-            _f.write(_json.dumps({
+            },
+            {
                 "role": "user", "content": _content,
                 "timestamp": _now,
-            }, ensure_ascii=False) + "\n")
+            },
+        ])
 
         # WebUI transcript
-        _tpath = f"{_webui_dir}/websocket_{_cid}.jsonl"
-        with open(_tpath, "w") as _tf:
-            _tf.write(_json.dumps({"event": "delta", "text": _content, "chat_id": _cid}, ensure_ascii=False) + "\n")
-            _tf.write(_json.dumps({"event": "stream_end", "text": _content, "chat_id": _cid}, ensure_ascii=False) + "\n")
-            _tf.write(_json.dumps({"event": "turn_end", "chat_id": _cid}, ensure_ascii=False) + "\n")
+        self._platform.write_webui_transcript(_agent, _cid, [
+            {"event": "delta", "text": _content, "chat_id": _cid},
+            {"event": "stream_end", "text": _content, "chat_id": _cid},
+            {"event": "turn_end", "chat_id": _cid},
+        ])
 
         # Pin to sidebar
-        _os.makedirs(_webui_dir, exist_ok=True)
-        _sidebar_state = {}
-        if _os.path.exists(_sidebar_path):
-            try:
-                with open(_sidebar_path) as _f:
-                    _sidebar_state = _json.load(_f) or {}
-            except Exception:
-                pass
+        _sidebar_state = self._platform.read_sidebar_state(_agent)
         _sidebar_state.setdefault("pinned_keys", []).insert(0, _key)
         _sidebar_state["updated_at"] = _now
         _sidebar_state.setdefault("schema_version", 1)
-        with open(_sidebar_path, "w") as _f:
-            _json.dump(_sidebar_state, _f, ensure_ascii=False, indent=2)
-            _f.write("\n")
+        self._platform.write_sidebar_state(_agent, _sidebar_state)
 
         self._binding_chat_cid = _cid
         self._log(f"📌 pinned binding chat ({_cid[:12]}...) — {len(_bindings)} channels")
@@ -1212,8 +1224,7 @@ class Gatekeeper:
                                 _env = json.loads(data)
                                 if isinstance(_env, dict) and _env.get("chat_id") == _binding_cid:
                                     if _env.get("type") == "message":
-                                        _chs = "、".join(f"绑定{b.display}" for b in getattr(self, '_bindings', []))
-                                        _reply = f"👆 请点击上方链接绑定社交通道，无需在此聊天。\n\n点击 {_chs} 即可操作。"
+                                        _reply = "👆 请点击上方链接操作（社交通道绑定、Agent 管理、系统重置），无需在此聊天。"
                                         await client_ws.send_text(json.dumps({
                                             "event": "delta", "data": _reply,
                                             "chat_id": _binding_cid,
@@ -1383,31 +1394,19 @@ def create_app() -> FastAPI:
                         _form[_k] = str(_raw.get(_k, "")).strip()
             except Exception:
                 pass
-            _instance_dir = gk._platform.instance_path(_agent)
-            _account_dir = f"{_instance_dir}/channels/{_ch}"
-            os.makedirs(_account_dir, exist_ok=True)
-            _account_path = f"{_account_dir}/account.json"
-            with open(_account_path, "w") as _f:
-                json.dump(_form, _f)
-            os.chmod(_account_path, 0o600)
+            # Write credential via platform (auto-syncs for ModelScope)
+            gk._platform.write_credential(_agent, _ch, dict(_form))
 
             # Also update config.json so the channel is enabled
-            _cfg_path = f"{_instance_dir}/config.json"
-            try:
-                with open(_cfg_path) as _f:
-                    _cfg = json.load(_f)
-            except Exception:
-                _cfg = {}
+            _cfg = gk._platform.read_config(_agent)
             _ch_cfg = _cfg.get("channels", {}).get(_ch, {})
             _ch_cfg["enabled"] = True
             _ch_cfg.setdefault("allow_from", ["*"])
-            _ch_cfg.update(_form)
+            _ch_cfg.update(dict(_form))
             _cfg.setdefault("channels", {})[_ch] = _ch_cfg
-            with open(_cfg_path, "w") as _f:
-                json.dump(_cfg, _f, ensure_ascii=False, indent=2)
-            os.chmod(_cfg_path, 0o600)
+            gk._platform.write_config(_agent, _cfg)
 
-            print(f"✅ /bind/{_ch}: user={_username} → agent={_agent}, creds → {_account_path}")
+            print(f"✅ /bind/{_ch}: user={_username} → agent={_agent}, creds → {_instance_dir}/channels/{_ch}/")
 
             # ── Restart agent so it loads fresh config.json with new channel ──
             _token = f"instances/{_agent}/"
@@ -1432,6 +1431,22 @@ def create_app() -> FastAPI:
 
         _app.get(f"/bind/{_ch}")(_bind_page)
         _app.post(f"/bind/{_ch}/submit")(_bind_submit)
+
+        # Register public sub-routes from BindingSpec (e.g., /bind/wechat/qr, /bind/wechat/status)
+        # /submit is already handled by gatekeeper's _bind_submit above
+        for _suffix, _method, _handler in _spec.public_routes:
+            if _suffix == "/submit":
+                continue
+            async def _sub_handler(request: Request, _handler=_handler):
+                if not request.session.get("user"):
+                    return JSONResponse({"error": "请先登录"}, status_code=401)
+                _username = gk._platform.extract_username(request.session.get("user"))
+                request.state.bound_agent = gk._platform.get_agent_for_user(_username) or "default"
+                return await _handler(request)
+            _app.add_api_route(f"/bind/{_ch}{_suffix}", _sub_handler, methods=[_method])
+
+    # ── Agent management routes ───────────────────────────────
+    create_agent_routes(_app, gk)
 
     # ── Wire routes ───────────────────────────────────────────
     _app.get("/health")(gk._handle_health)

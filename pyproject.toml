@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nanobot-legion"
+version = "0.1.0"
+description = "Squad multi-agent overlay for nanobot cloud deployments"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [{name = "DreamShepherd"}]
+dependencies = [
+    "fastapi>=0.109",
+    "httpx>=0.27",
+    "starlette>=0.37",
+    "uvicorn[standard]>=0.29",
+    "websocket-client>=1.6",
+    "websockets>=12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+nanobot_legion = [
+    "deploy/*.sh",
+    "deploy/*.json",
+    "deploy/scripts/*.sh",
+    "patched_files/**/*.py",
+    "vanilla_webui_dist/**/*",
+    "webui_dist/**/*",
+]

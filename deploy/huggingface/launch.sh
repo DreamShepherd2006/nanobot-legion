@@ -79,22 +79,26 @@ eval "$(cloud-gateway-setup)"
 echo "✅ [System] 平台初始化完成"
 
 # ── 3a. Peer env fallback（squad_config.json → env）──────────────
-if [ -z "$NANOBOT_PEER_NEO" ] && [ -f "$SQUAD_CONFIG_PATH" ]; then
-    echo "🔧 [Config] 从 squad_config.json 导出编制环境变量..."
+# Always export peers from squad_config.json to pick up dynamically added agents.
+# Existing NANOBOT_PEER_* env vars (from /proc/1/environ) take priority.
+if [ -f "$SQUAD_CONFIG_PATH" ]; then
     python3 -c "
-import json
+import json, os, shlex
 cfg = json.load(open('$SQUAD_CONFIG_PATH'))
+count = 0
 for name, info in cfg.get('peers', {}).items():
-    print(f'export NANOBOT_PEER_{name.upper()}=\'' + json.dumps({
-        'id': info['id'],
-        'gateway_port': info['gateway_port'],
-        'ws_port': info['ws_port']
-    }) + '\'')
+    env_key = f'NANOBOT_PEER_{name.upper()}'
+    if env_key not in os.environ:
+        val = json.dumps({'id': info['id'], 'gateway_port': info['gateway_port'], 'ws_port': info['ws_port']})
+        print(f'export {env_key}={shlex.quote(val)}')
+        count += 1
+if count:
+    print(f'# {count} new peer(s) from squad_config.json', end='')
 " > /tmp/peers_env.sh
-    source /tmp/peers_env.sh
-    echo "   ✅ 已从 squad_config.json 导出 $(grep -c 'export' /tmp/peers_env.sh) 个 peer"
-elif [ -n "$NANOBOT_PEER_NEO" ]; then
-    echo "✅ [System] 环境变量已就绪"
+    if grep -q 'export' /tmp/peers_env.sh 2>/dev/null; then
+        source /tmp/peers_env.sh
+        echo "   ✅ 已从 squad_config.json 导出新 peer"
+    fi
 fi
 
 # ── 4. 构建军团花名册 SQUAD_LEGION ─────────────────────────────────
@@ -164,11 +168,8 @@ fi
 
 # ── 8. 军团配置同步 ────────────────────────────────────────────────
 echo "🔧 [System] 执行军团配置同步..."
-if [ -f "/app/squad_config_sync.py" ]; then
-    python3 /app/squad_config_sync.py
-else
-    echo "⚠️ [System] 未发现 squad_config_sync.py，跳过"
-fi
+echo "🔧 [System] 执行军团配置同步 (via nanobot-legion pip package)..."
+python3 -m nanobot_legion.squad_config_sync
 
 # ── 9. 日志管道预热 ────────────────────────────────────────────────
 echo "📑 [System] 正在初始化日志通道..."
@@ -247,7 +248,7 @@ else
 fi
 
 mkdir -p "$MOUNT_PATH/instances/logs"
-stdbuf -oL python3 -u gatekeeper.py 2>&1 \
+stdbuf -oL python3 -u -m nanobot_legion.gatekeeper 2>&1 \
     | stdbuf -oL sed "s/^/[GATEKEEPER] /" \
     | tee -a "$MOUNT_PATH/instances/logs/gatekeeper.log"
 
