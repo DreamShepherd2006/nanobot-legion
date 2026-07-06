@@ -42,33 +42,23 @@ if cid and secret and 'OAUTH_CLIENT_ID' not in __import__('os').environ:
     fi
 done
 
-# ── 1. Route to squad if Legion layer present ─────────────────────
-if [ -x /app/deploy/huggingface/launch.sh ]; then
-    echo "🦁 Squad Legion layer detected — delegating to launch.sh"
+# ── 0c. Detect DATA_ROOT (needed for Legion vs single choice) ──────
+if [ -d /mnt/workspace ]; then
+    DATA_ROOT=/mnt/workspace
+elif [ -d /data ]; then
+    DATA_ROOT=/data
+else
+    DATA_ROOT=/tmp
+fi
+
+# ── 1. Route to squad if user chose Legion at setup ────────────────
+#     setup writes squad_config.json to persistent volume only for Legion mode.
+if [ -f "${DATA_ROOT}/squad_config.json" ] && [ -x /app/deploy/huggingface/launch.sh ]; then
+    echo "🦁 Squad Legion mode (squad_config.json found) — delegating to launch.sh"
     exec /app/deploy/huggingface/launch.sh
 fi
 
-# ── 2. Platform detection ─────────────────────────────────────────
-echo "🔍 Detecting cloud platform..."
-eval "$(cloud-gateway-setup)"
-echo "✅ Platform: ${DEPLOY_PLATFORM:-unknown}"
-
-# ── 3. Storage-first: seed → persistent ───────────────────────────
-DATA_ROOT="${DATA_ROOT:-/data}"
-echo "📂 data_root = $DATA_ROOT"
-
-PERSIST="$DATA_ROOT/instances"
-SEED="/app/seed/instances"
-if [ -d "$SEED" ] && [ ! -d "$PERSIST/_template" ]; then
-    echo "📋 First run — seeding instances"
-    mkdir -p "$PERSIST"
-    cp -r "$SEED"/* "$PERSIST/"
-fi
-
-mkdir -p "$HOME/.nanobot"
-ln -sfn "$DATA_ROOT/instances" "$HOME/.nanobot/instances" 2>/dev/null || true
-echo "✅ Storage linked"
-
-# ── 4. Launch ─────────────────────────────────────────────────────
-echo "☁️  Starting nanobot gateway..."
-exec nanobot gateway --port 7860 --workspace "$DATA_ROOT/instances"
+# ── 2. Single-agent Phase 2 → template_launch ─────────────────────
+#     Handles platform detection, storage seeding, gateway + oauth_proxy internally.
+echo "☁️  Single-agent mode — launching via template_launch"
+exec python3 -m cloud_agent_gateway.template_launch
