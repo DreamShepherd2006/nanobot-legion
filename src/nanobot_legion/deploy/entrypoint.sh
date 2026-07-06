@@ -63,20 +63,8 @@ fi
 #     Export DATA_ROOT so template_launch uses correct path (not from baked-in squad_config).
 echo "☁️  Single-agent mode — launching via template_launch"
 
-# Symlink vanilla webui → site-packages (deployed by nanobot-legion install.py)
-_WEBUI_DST=$(python3 -c "
-import importlib.resources
-try:
-    d = importlib.resources.files('nanobot')
-    print(str(d / 'web' / 'dist'))
-except Exception:
-    import nanobot, pathlib
-    print(pathlib.Path(nanobot.__file__).parent / 'web' / 'dist')
-")
-if [ -d /app/vanilla_webui ] && [ ! -L "$_WEBUI_DST" ]; then
-    rm -rf "$_WEBUI_DST" 2>/dev/null || true
-    ln -sfn /app/vanilla_webui "$_WEBUI_DST"
-fi
+# 通过 NANOBOT_WEBUI_DIST 环境变量指定原生 webui 路径
+export NANOBOT_WEBUI_DIST=/app/vanilla_webui
 
 export DATA_ROOT
 exec python3 -m cloud_agent_gateway.template_launch

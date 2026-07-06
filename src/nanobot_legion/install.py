@@ -43,17 +43,16 @@ def _deploy_patched_python(nanobot_dir: Path, pkg_dir: Path) -> None:
 
 
 def _deploy_webui_dist(nanobot_dir: Path, pkg_dir: Path) -> None:
-    """Copy webui dists to /app/ only — runtime symlinks bind to site-packages.
+    """Copy webui dists to /app/ only.
 
-    Neither vanilla nor Legion webui is written directly to site-packages.
-    pip install runs as root, so those files would be root-owned and the
-    nanobot user cannot rm -rf them later when launch.sh swaps the symlink.
+    Runtime activation uses the NANOBOT_WEBUI_DIST env var (patched into
+    nanobot's _default_webui_dist()).  No symlinks or chmod needed.
 
     1. Vanilla nanobot webui → /app/vanilla_webui/
-       Used by single-agent mode (entrypoint.sh symlinks at runtime).
+        Used by single-agent mode (entrypoint.sh exports NANOBOT_WEBUI_DIST).
 
     2. Legion-patched webui  → /app/legion_webui/
-       Used by Legion mode (launch.sh symlinks at runtime).
+        Used by Legion mode (launch.sh exports NANOBOT_WEBUI_DIST).
     """
     # Target 1: vanilla webui → /app/vanilla_webui/
     vanilla_src = pkg_dir / "vanilla_webui_dist"
@@ -109,14 +108,6 @@ def main() -> None:
 
     _deploy_patched_python(nanobot_dir, pkg_dir)
     _deploy_webui_dist(nanobot_dir, pkg_dir)
-
-    # Make nanobot/web/ world-writable so the runtime user can create the
-    # web/dist symlink.  pip install runs as root; ln(1) at runtime runs as
-    # nanobot — that user needs write permission on the parent directory.
-    import stat as _stat
-    _web_dir = nanobot_dir / "web"
-    _web_dir.chmod(_web_dir.stat().st_mode | _stat.S_IWGRP | _stat.S_IWOTH)
-    print(f"  🔓 {_web_dir} → writable for runtime symlink")
 
     from nanobot_legion.deploy.extract_assets import extract
     extract()

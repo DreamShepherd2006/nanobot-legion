@@ -187,27 +187,13 @@ done
 echo "[$(date '+%H:%M:%S')] 🚀 gatekeeper 通道初始化完毕" > "$HOME/gatekeeper.log"
 
 # ── 10. 激活 Legion WebUI ──────────────────────────────────────────
-# 将 /app/legion_webui/ 软链接到 nanobot 的 web/dist，替换原版 webui。
+# 通过 NANOBOT_WEBUI_DIST 环境变量直接指定路径（nanobot-legion 补丁提供支持）。
 # 单 agent 模式不执行 launch.sh，因此保留原版 webui（sidebar pin ✅）。
-_WEBUI_SRC="/app/legion_webui"
-_WEBUI_DST=$(python3 -c "
-import importlib.resources
-try:
-    d = importlib.resources.files('nanobot')
-    print(str(d / 'web' / 'dist'))
-except Exception:
-    import nanobot, pathlib
-    print(pathlib.Path(nanobot.__file__).parent / 'web' / 'dist')
-")
-if [ -d "$_WEBUI_SRC" ]; then
-    # Only remove if it's a plain directory or broken symlink — safe to skip
-    # if files are root-owned (pip install ran as root, launch.sh runs as nanobot).
-    rm -rf "$_WEBUI_DST" 2>/dev/null || true
-    mkdir -p "$(dirname "$_WEBUI_DST")"
-    ln -sfn "$_WEBUI_SRC" "$_WEBUI_DST"
-    echo "🎨 [Legion] WebUI activated → $_WEBUI_DST"
+if [ -d /app/legion_webui ]; then
+    export NANOBOT_WEBUI_DIST=/app/legion_webui
+    echo "🎨 [Legion] WebUI path → $NANOBOT_WEBUI_DIST"
 else
-    echo "⚠️  [Legion] $_WEBUI_SRC not found — keeping original webui"
+    echo "⚠️  [Legion] /app/legion_webui not found — using nanobot default webui"
 fi
 
 # ── 11. Agent 启动 ─────────────────────────────────────────────────
