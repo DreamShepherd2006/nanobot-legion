@@ -6,8 +6,8 @@ Usage (in Dockerfile):
 
 Steps:
   1. Copy patched Python files → site-packages/nanobot/
-  2. Copy pre-built patched webui dist → /app/legion_webui/ (not overwriting
-     nanobot's original; launch.sh symlinks at runtime for Legion mode)
+  2. Copy pre-built patched webui dist → site-packages/nanobot/web/dist/
+     (single-agent mode) AND /app/legion_webui/ (Legion mode via launch.sh)
   3. Extract deploy assets (entrypoint.sh, launch.sh, configs, etc.)
 """
 
@@ -40,33 +40,50 @@ def _deploy_patched_python(nanobot_dir: Path, pkg_dir: Path) -> None:
     print("  ✅ patched Python files deployed")
 
 
-def _deploy_webui_dist(pkg_dir: Path) -> None:
-    """Copy pre-built patched webui dist to /app/legion_webui/.
+def _deploy_webui_dist(nanobot_dir: Path, pkg_dir: Path) -> None:
+    """Copy pre-built patched webui dist to two locations:
 
-    Deploys to a neutral location instead of overwriting nanobot's original
-    web/dist, so single-agent mode (which doesn't run launch.sh) keeps the
-    original webui with correct sidebar pinning.
+    1. site-packages/nanobot/web/dist/  — used by single-agent mode
+    2. /app/legion_webui/               — symlinked by launch.sh in Legion mode
+
+    The nanobot fork does not ship a built frontend, so the patched dist is
+    the only webui available.  Both modes receive the same dist; the Legion
+    webui includes LegionTerminal/Roster which are inactive outside squad
+    mode, and pinned sidebar keys work identically in both modes.
     """
     src = pkg_dir / "webui_dist"
-    dst = Path("/app/legion_webui")
 
     if not src.is_dir() or not any(src.iterdir()):
         print("  ⚠️  webui_dist empty — skipping")
         return
 
-    if dst.exists():
-        shutil.rmtree(dst)
-    dst.mkdir(parents=True, exist_ok=True)
-
+    # Target 1: site-packages (single-agent mode)
+    dst_site = nanobot_dir / "web" / "dist"
+    if dst_site.exists():
+        shutil.rmtree(dst_site)
+    dst_site.mkdir(parents=True, exist_ok=True)
     for item in src.iterdir():
-        d = dst / item.name
+        d = dst_site / item.name
         if item.is_dir():
             shutil.copytree(item, d)
         else:
             shutil.copy2(item, d)
+    n_site = sum(1 for _ in dst_site.rglob("*") if _.is_file())
+    print(f"  ✅ webui dist → {dst_site} ({n_site} files)")
 
-    n_files = sum(1 for _ in dst.rglob("*") if _.is_file())
-    print(f"  ✅ webui dist deployed → {dst} ({n_files} files)")
+    # Target 2: /app/legion_webui/ (Legion mode, launch.sh symlink)
+    dst_app = Path("/app/legion_webui")
+    if dst_app.exists():
+        shutil.rmtree(dst_app)
+    dst_app.mkdir(parents=True, exist_ok=True)
+    for item in src.iterdir():
+        d = dst_app / item.name
+        if item.is_dir():
+            shutil.copytree(item, d)
+        else:
+            shutil.copy2(item, d)
+    n_app = sum(1 for _ in dst_app.rglob("*") if _.is_file())
+    print(f"  ✅ webui dist → {dst_app} ({n_app} files)")
 
 
 def main() -> None:
@@ -83,7 +100,7 @@ def main() -> None:
     pkg_dir = Path(nanobot_legion.__file__).parent
 
     _deploy_patched_python(nanobot_dir, pkg_dir)
-    _deploy_webui_dist(pkg_dir)
+    _deploy_webui_dist(nanobot_dir, pkg_dir)
 
     from nanobot_legion.deploy.extract_assets import extract
     extract()
