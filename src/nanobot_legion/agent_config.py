@@ -6,7 +6,7 @@ Provider 列表来自 nanobot 官方 ``providers/registry.py``，自动跟随上
 """
 from __future__ import annotations
 
-import json, os
+import datetime, json, os, shutil
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
@@ -264,6 +264,28 @@ document.getElementById('addForm').addEventListener('submit', async function(e) 
     result.innerHTML = '<div class="err">❌ 提交失败: ' + err.message + '</div>';
   }
 });
+
+async function removeAgent(name) {
+  if (!confirm('确定要删除 Agent "' + name + '" 吗？\n\n其配置目录将被归档，重启空间后生效。')) return;
+  const result = document.getElementById('result');
+  result.innerHTML = '';
+  try {
+    const resp = await fetch('/config/agents/remove', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      result.innerHTML = '<div class="ok">✅ ' + data.msg + '</div>';
+      setTimeout(() => { window.location.reload(); }, 1500);
+    } else {
+      result.innerHTML = '<div class="err">❌ ' + data.error + '</div>';
+    }
+  } catch(err) {
+    result.innerHTML = '<div class="err">❌ 提交失败: ' + err.message + '</div>';
+  }
+}
 </script>
 </body>
 </html>
@@ -340,9 +362,13 @@ def _render_agent_table(squad_config: dict, neo_config: dict) -> str:
         ws = info.get("ws_port", "?")
         is_cmd = info.get("id") == "squad:commander"
         tag = '<span class="tag tag-cmd">Commander</span>' if is_cmd else '<span class="tag tag-work">Worker</span>'
-        rows.append(f"<tr><td>{name} {tag}</td><td>{gw}/{ws}</td></tr>")
+        if is_cmd:
+            action = ""
+        else:
+            action = f'<button class="del-btn" onclick="removeAgent(\'{name}\')">删除</button>'
+        rows.append(f"<tr><td>{name} {tag}</td><td>{gw}/{ws}</td><td>{action}</td></tr>")
     
-    return ("<table><tr><th>Agent</th><th>端口 (gw/ws)</th></tr>"
+    return ("<table><tr><th>Agent</th><th>端口 (gw/ws)</th><th>操作</th></tr>"
             + "\n".join(rows) + "</table>")
 
 
@@ -362,10 +388,32 @@ def _escape_js(s: str) -> str:
     return s.replace("\\", "\\\\").replace("'", "\\'")
 
 
+def _get_listening_ports() -> set[int]:
+    """Return ports currently in LISTEN state from /proc/net/tcp and /proc/net/tcp6."""
+    used = set()
+    for proc_path in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(proc_path) as f:
+                for line_no, line in enumerate(f):
+                    if line_no == 0:
+                        continue  # Skip header
+                    parts = line.split()
+                    if len(parts) >= 4 and parts[3] == "0A":  # LISTEN
+                        local = parts[1].split(":")
+                        if len(local) == 2:
+                            port = int(local[1], 16)
+                            if port > 0:
+                                used.add(port)
+        except Exception:
+            pass
+    return used
+
+
 def _allocate_ports(peers: dict) -> tuple[int, int]:
     """Find next available gateway_port and ws_port.
-    
-    Returns (gw, ws) where both are > max existing ports and ws > gw.
+
+    Returns (gw, ws) — checks both squad_config.json peers AND
+    ports currently in LISTEN state to avoid collisions.
     """
     all_ports = set()
     for info in peers.values():
@@ -375,14 +423,22 @@ def _allocate_ports(peers: dict) -> tuple[int, int]:
             all_ports.add(int(gp))
         if isinstance(wp, (int, float)) and wp > 0:
             all_ports.add(int(wp))
-    
+
+    # Merge with ports actually in use
+    all_ports |= _get_listening_ports()
+
     if not all_ports:
-        return 18795, 18895  # Default for first worker after neo
-    
-    max_port = max(all_ports)
-    gw = max_port + 1
-    ws = gw + 1
-    return gw, ws
+        return 18795, 18895
+
+    candidate = max(all_ports) + 1
+    for _ in range(1000):  # Safety limit
+        gw = candidate
+        ws = candidate + 1
+        if gw not in all_ports and ws not in all_ports:
+            return gw, ws
+        candidate += 2
+
+    raise RuntimeError("No available ports found")
 
 
 # ── Route Handlers ─────────────────────────────────────────
@@ -530,6 +586,64 @@ def create_agent_routes(app, gatekeeper):
             status_code=201
         )
 
+    async def _remove_agent(request: Request):
+        """POST /config/agents/remove — delete a worker agent."""
+        _user = request.session.get("user")
+        if not _user:
+            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "无效的请求格式"}, status_code=400)
+
+        name = (body.get("name", "") or "").strip()
+
+        squad_cfg = load_config(force_reload=True)
+        peers = squad_cfg.get("peers", {})
+
+        if name not in peers:
+            return JSONResponse({"ok": False, "error": f"Agent '{name}' 不存在"}, status_code=404)
+
+        info = peers[name]
+        if info.get("id") == "squad:commander":
+            return JSONResponse(
+                {"ok": False, "error": f"'{name}' 是 Commander，不可删除"},
+                status_code=403,
+            )
+
+        # Remove from peers
+        del peers[name]
+        squad_cfg["peers"] = peers
+
+        # Persist squad_config.json
+        config_path_sc = _get_config_path()
+        try:
+            with open(config_path_sc, "w") as f:
+                json.dump(squad_cfg, f, indent=2, ensure_ascii=False)
+        except OSError as e:
+            return JSONResponse(
+                {"ok": False, "error": f"squad_config 更新失败: {e}"},
+                status_code=500,
+            )
+
+        # Archive agent directory (rename instead of delete for safety)
+        data_root = squad_cfg.get("data_root", "/data")
+        agent_dir = os.path.join(data_root, "instances", name)
+        if os.path.exists(agent_dir):
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            archived_dir = os.path.join(data_root, "instances", f"{name}.removed.{ts}")
+            try:
+                shutil.move(agent_dir, archived_dir)
+            except OSError as e:
+                print(f"[agent_config] ⚠️  归档 '{name}' 目录失败: {e}，已移除 peer", flush=True)
+
+        return JSONResponse({
+            "ok": True,
+            "msg": f"Agent '{name}' 已删除。配置已归档，重启空间后生效。",
+        })
+
     # Mount routes
     app.get("/config/agents")(_agent_page)
     app.post("/config/agents/add")(_add_agent)
+    app.post("/config/agents/remove")(_remove_agent)
