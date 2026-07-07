@@ -83,6 +83,13 @@ fi
 # ── 3. 平台环境初始化 ────────────────────────────────────────────
 echo "🧬 [System] 平台环境初始化..."
 eval "$(cloud-gateway-setup)"
+
+# ── Reset check: platform_setup signals oauth.json deleted ──
+if [ -n "${RESET_DONE:-}" ]; then
+    echo "🔄 [Reset] oauth.json deleted — restarting into Phase 1 setup..."
+    exit 0
+fi
+
 echo "✅ [System] 平台初始化完成"
 
 # ── 3a. Peer env fallback（squad_config.json → env）──────────────
