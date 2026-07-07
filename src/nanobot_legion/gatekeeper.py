@@ -46,6 +46,7 @@ from starlette.middleware.sessions import SessionMiddleware
 import websockets
 from cloud_agent_gateway.channel_binding import discover as discover_bindings
 from cloud_agent_gateway import file_manager
+from cloud_agent_gateway.package_source import get_package_source, build_source_link
 
 # ── Platform (auto-detected) ──
 # IMPORTANT: squad_config_loader must be imported BEFORE platforms!
@@ -185,6 +186,15 @@ class Gatekeeper:
             for _spec in _bindings
         )
 
+        # ── dynamic source links (aligned with oauth_proxy.py) ──
+        cag_info = get_package_source("cloud-agent-gateway")
+        nanobot_info = get_package_source("nanobot-ai")
+        nanobot_legion_info = get_package_source("nanobot-legion")
+
+        cag_link = build_source_link(cag_info, "DreamShepherd2006/cloud-agent-gateway")
+        nanobot_link = build_source_link(nanobot_info, "DreamShepherd2006/nanobot", "nightly")
+        nanobot_legion_link = build_source_link(nanobot_legion_info, "DreamShepherd2006/nanobot-legion")
+
         # Build content matching oauth_proxy.py BINDING_CHAT_CONTENT structure
         _content = f"""\
 # 📱 社交通道配置
@@ -229,13 +239,16 @@ Agent 生成的输出文件存放在此，可随时下载。
 
 # 📦 开源代码
 
-本项目基于以下开源组件构建：
+本项目完全开源。
 
-- **cloud-agent-gateway** (框架层): [DreamShepherd2006/cloud-agent-gateway](https://github.com/DreamShepherd2006/cloud-agent-gateway)
-- **nanobot-legion** (部署层): [DreamShepherd2006/nanobot-legion](https://github.com/DreamShepherd2006/nanobot-legion)
-- **nanobot** (AI 引擎): [HKUDS/nanobot](https://github.com/HKUDS/nanobot)
+| 组件 | 源码 |
+|------|------|
+| cloud-agent-gateway（框架层） | {cag_link} |
+| nanobot-legion（部署层） | {nanobot_legion_link} |
+| nanobot（AI 引擎） | {nanobot_link} |
 
-部署方式：\n1. 将本空间的 Dockerfile 上传到你的 HuggingFace Space 或 ModelScope Studio\n2. 空间自动构建并启动，访问 Setup 页面完成初始化"""
+🧭 点击上方链接浏览完整代码，仓库中的 Dockerfile 可用于部署新空间。
+"""
 
         # Clean up old binding sessions — matches both current and legacy titles
         _state = self._platform.read_sidebar_state(_agent)
