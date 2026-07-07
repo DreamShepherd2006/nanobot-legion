@@ -388,10 +388,32 @@ def _escape_js(s: str) -> str:
     return s.replace("\\", "\\\\").replace("'", "\\'")
 
 
+def _get_listening_ports() -> set[int]:
+    """Return ports currently in LISTEN state from /proc/net/tcp and /proc/net/tcp6."""
+    used = set()
+    for proc_path in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(proc_path) as f:
+                for line_no, line in enumerate(f):
+                    if line_no == 0:
+                        continue  # Skip header
+                    parts = line.split()
+                    if len(parts) >= 4 and parts[3] == "0A":  # LISTEN
+                        local = parts[1].split(":")
+                        if len(local) == 2:
+                            port = int(local[1], 16)
+                            if port > 0:
+                                used.add(port)
+        except Exception:
+            pass
+    return used
+
+
 def _allocate_ports(peers: dict) -> tuple[int, int]:
     """Find next available gateway_port and ws_port.
-    
-    Returns (gw, ws) where both are > max existing ports and ws > gw.
+
+    Returns (gw, ws) — checks both squad_config.json peers AND
+    ports currently in LISTEN state to avoid collisions.
     """
     all_ports = set()
     for info in peers.values():
@@ -401,14 +423,22 @@ def _allocate_ports(peers: dict) -> tuple[int, int]:
             all_ports.add(int(gp))
         if isinstance(wp, (int, float)) and wp > 0:
             all_ports.add(int(wp))
-    
+
+    # Merge with ports actually in use
+    all_ports |= _get_listening_ports()
+
     if not all_ports:
-        return 18795, 18895  # Default for first worker after neo
-    
-    max_port = max(all_ports)
-    gw = max_port + 1
-    ws = gw + 1
-    return gw, ws
+        return 18795, 18895
+
+    candidate = max(all_ports) + 1
+    for _ in range(1000):  # Safety limit
+        gw = candidate
+        ws = candidate + 1
+        if gw not in all_ports and ws not in all_ports:
+            return gw, ws
+        candidate += 2
+
+    raise RuntimeError("No available ports found")
 
 
 # ── Route Handlers ─────────────────────────────────────────
