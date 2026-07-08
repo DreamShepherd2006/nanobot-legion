@@ -13,5 +13,6 @@
   "dlq_dir": "/data/dlq",
   "peers": {
     "neo": {"id": "squad:commander", "gateway_port": 20001, "ws_port": 20002}
-  }
+  },
+  "resurrection_whitelist": ["neo"]
 }
