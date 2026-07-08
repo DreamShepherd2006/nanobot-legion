@@ -43,9 +43,9 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
 }
 
 _SKIP_PROVIDERS = frozenset({"bedrock", "azure_openai", "ovms", "nvidia",
-                               "openai_codex", "github_copilot",
-                               "minimax_anthropic",
-                               "volcengine_coding_plan", "byteplus_coding_plan"})
+                                "openai_codex", "github_copilot",
+                                "minimax_anthropic",
+                                "volcengine_coding_plan", "byteplus_coding_plan"})
 
 
 def _get_setup_providers() -> list:
@@ -140,6 +140,7 @@ _HTML = r"""\
   .ok { background:#e8f5e9; border:1px solid #a5d6a7; color:#2e7d32; border-radius:6px; padding:12px; margin:16px 0; font-size:.88em; }
   .del-btn { background:none; border:1px solid #ccc; color:#999; padding:4px 10px; font-size:.8em; cursor:pointer; border-radius:4px; margin-left:8px; }
   .del-btn:hover { border-color:#e53935; color:#e53935; }
+  .archived-row td { color:#888; }
 </style>
 </head>
 <body>
@@ -150,8 +151,11 @@ _HTML = r"""\
   Worker agent 通过下方表单添加，重启后生效。
 </p>
 
-<h2>📋 当前 Agent 列表</h2>
-{agent_table}
+<h2>✅ 运行中</h2>
+{running_table}
+
+<h2>📦 已归档</h2>
+{archived_table}
 
 <h2>➕ 添加 Worker Agent</h2>
 <form id="addForm">
@@ -350,39 +354,6 @@ def _build_worker_providers(provider_id: str, model_id: str, api_key: str,
     }
 
 
-def _render_agent_table(squad_config: dict, neo_config: dict) -> str:
-    """Render HTML table of current agents."""
-    peers = squad_config.get("peers", {})
-    if not peers:
-        return '<p class="empty">暂无 agent（异常状态）</p>'
-    
-    rows = []
-    for name, info in sorted(peers.items()):
-        gw = info.get("gateway_port", "?")
-        ws = info.get("ws_port", "?")
-        is_cmd = info.get("id") == "squad:commander"
-        tag = '<span class="tag tag-cmd">Commander</span>' if is_cmd else '<span class="tag tag-work">Worker</span>'
-        if is_cmd:
-            action = ""
-        else:
-            action = f'<button class="del-btn" onclick="removeAgent(\'{name}\')">删除</button>'
-        rows.append(f"<tr><td>{name} {tag}</td><td>{gw}/{ws}</td><td>{action}</td></tr>")
-    
-    return ("<table><tr><th>Agent</th><th>端口 (gw/ws)</th><th>操作</th></tr>"
-            + "\n".join(rows) + "</table>")
-
-
-def _render_model_options(options: list[dict]) -> str:
-    """Render <option> tags for model dropdown. (Kept for backward compat.)"""
-    if not options:
-        return '<option value="">(未找到可用模型)</option>'
-    lines = []
-    for i, opt in enumerate(options):
-        selected = ' selected' if i == 0 else ''
-        lines.append(f'        <option value="{opt["id"]}:{opt["model"]}"{selected}>{opt["label"]}</option>')
-    return "\n".join(lines)
-
-
 def _escape_js(s: str) -> str:
     """Escape a string for safe embedding in JS single-quoted string."""
     return s.replace("\\", "\\\\").replace("'", "\\'")
@@ -441,6 +412,146 @@ def _allocate_ports(peers: dict) -> tuple[int, int]:
     raise RuntimeError("No available ports found")
 
 
+# ── Agent Detection ────────────────────────────────────────
+
+def _detect_running_agents(squad_cfg: dict) -> dict[str, bool]:
+    """Check which peers have a running process. Returns {name: True/False}."""
+    peers = squad_cfg.get("peers", {})
+    if not peers:
+        return {}
+
+    # Build port→name map from peers
+    port_map: dict[int, str] = {}
+    for name, info in peers.items():
+        gp = info.get("gateway_port", 0)
+        if isinstance(gp, (int, float)) and gp > 0:
+            port_map[int(gp)] = name
+
+    # Scan /proc for processes matching gateway ports
+    found_ports: set[int] = set()
+    try:
+        for pid_dir in os.listdir("/proc"):
+            if not pid_dir.isdigit():
+                continue
+            try:
+                with open(f"/proc/{pid_dir}/cmdline", "rb") as f:
+                    cmdline = f.read()
+                    for port in port_map:
+                        needle = str(port).encode()
+                        if needle in cmdline:
+                            found_ports.add(port)
+            except (OSError, PermissionError):
+                pass
+    except OSError:
+        pass
+
+    running: dict[str, bool] = {}
+    for name, info in peers.items():
+        gp = info.get("gateway_port", 0)
+        if isinstance(gp, (int, float)) and gp > 0:
+            running[name] = int(gp) in found_ports
+        else:
+            running[name] = False
+
+    return running
+
+
+def _find_archived_agents(squad_cfg: dict) -> list[dict]:
+    """Find archived agent directories (.removed.*) and return metadata list."""
+    data_root = squad_cfg.get("data_root", "/data")
+    instances_dir = os.path.join(data_root, "instances")
+    archived = []
+    try:
+        for entry in os.listdir(instances_dir):
+            if ".removed." not in entry:
+                continue
+            dir_path = os.path.join(instances_dir, entry)
+            if not os.path.isdir(dir_path):
+                continue
+            # Parse: name.removed.timestamp → name
+            parts = entry.split(".removed.", 1)
+            if len(parts) != 2:
+                continue
+            orig_name = parts[0]
+            ts_str = parts[1]
+
+            # Try to read config.json for metadata
+            provider = ""
+            model = ""
+            config_path = os.path.join(dir_path, "config.json")
+            try:
+                with open(config_path) as f:
+                    cfg = json.load(f)
+                agents = cfg.get("agents", {})
+                defaults = agents.get("defaults", {}) if isinstance(agents, dict) else {}
+                provider = defaults.get("provider", "")
+                model = defaults.get("model", "")
+            except (FileNotFoundError, json.JSONDecodeError):
+                pass
+
+            archived.append({
+                "name": orig_name,
+                "timestamp": ts_str,
+                "dir_name": entry,
+                "provider": provider,
+                "model": model,
+            })
+    except OSError:
+        pass
+
+    archived.sort(key=lambda x: x.get("name", ""))
+    return archived
+
+
+# ── Render ─────────────────────────────────────────────────
+
+def _render_running_table(squad_cfg: dict, running: dict[str, bool]) -> str:
+    """Render HTML table of running agent peers with status icons."""
+    peers = squad_cfg.get("peers", {})
+    if not peers:
+        return '<p class="empty">暂无 agent（异常状态）</p>'
+
+    rows = []
+    for name, info in sorted(peers.items()):
+        gw = info.get("gateway_port", "?")
+        ws = info.get("ws_port", "?")
+        is_cmd = info.get("id") == "squad:commander"
+        is_up = running.get(name, False)
+        status_icon = "🟢" if is_up else "⚪"
+        tag = '<span class="tag tag-cmd">Commander</span>' if is_cmd else '<span class="tag tag-work">Worker</span>'
+        if is_cmd:
+            action = ""
+        else:
+            action = f'<button class="del-btn" onclick="removeAgent(\'{name}\')">删除</button>'
+        rows.append(f"<tr><td>{status_icon} {name} {tag}</td><td>{gw}/{ws}</td><td>{action}</td></tr>")
+
+    return ("<table><tr><th>Agent</th><th>端口 (gw/ws)</th><th>操作</th></tr>"
+            + "\n".join(rows) + "</table>")
+
+
+def _render_archived_table(archived: list[dict]) -> str:
+    """Render HTML table of archived (removed) agents."""
+    if not archived:
+        return '<p class="empty">无已归档的 agent</p>'
+
+    rows = []
+    for a in archived:
+        name = a["name"]
+        provider = a.get("provider") or "—"
+        model = a.get("model") or "—"
+        ts = a.get("timestamp", "")
+        ts_display = ts[:8] if len(ts) >= 8 else ts
+        rows.append(
+            f"<tr class=\"archived-row\"><td>📦 {name}</td>"
+            f"<td>{provider}</td><td style='max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>{model}</td>"
+            f"<td style='font-size:.8em;color:#999'>{ts_display}</td>"
+            f"<td></td></tr>"
+        )
+
+    return ("<table><tr><th>Agent</th><th>Provider</th><th>Model</th><th>归档时间</th><th>操作</th></tr>"
+            + "\n".join(rows) + "</table>")
+
+
 # ── Route Handlers ─────────────────────────────────────────
 
 def create_agent_routes(app, gatekeeper):
@@ -457,11 +568,16 @@ def create_agent_routes(app, gatekeeper):
         neo_cfg = _get_neo_config(squad_cfg)
         neo_provider_id, neo_api_key, _ = _get_neo_provider_info(neo_cfg)
 
-        agent_table = _render_agent_table(squad_cfg, neo_cfg)
+        running = _detect_running_agents(squad_cfg)
+        archived = _find_archived_agents(squad_cfg)
+
+        running_table = _render_running_table(squad_cfg, running)
+        archived_table = _render_archived_table(archived)
         provider_opts, presets_js = _build_provider_js_data()
 
         html = (_HTML
-                .replace("{agent_table}", agent_table)
+                .replace("{running_table}", running_table)
+                .replace("{archived_table}", archived_table)
                 .replace("{provider_options}", provider_opts)
                 .replace("{provider_presets_js}", presets_js)
                 .replace("{neo_provider_id}", _escape_js(neo_provider_id))
