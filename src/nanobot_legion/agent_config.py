@@ -158,9 +158,11 @@ _HTML = r"""\
 </p>
 
 <h2>✅ 运行中</h2>
+<p style="color:#888;font-size:.82em;margin-bottom:8px">「删除」= 配置归档到下方，可从📦已归档恢复。重启后生效。</p>
 {running_table}
 
 <h2>📦 已归档</h2>
+<p style="color:#888;font-size:.82em;margin-bottom:8px">「恢复」= 还原目录并加入复活白名单。「🗑️」= 彻底删除，不可恢复。</p>
 {archived_table}
 
 <h2>➕ 添加 Worker Agent</h2>
