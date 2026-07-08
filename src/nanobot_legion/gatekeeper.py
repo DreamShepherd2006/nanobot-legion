@@ -320,7 +320,7 @@ Agent 生成的输出文件存放在此，可随时下载。
         self.squad_roster.clear()
         self.peer_env_map.clear()
 
-        cfg = load_config()
+        cfg = load_config(force_reload=True)
         peers = cfg.get("peers", {})
         for name, info in peers.items():
             if isinstance(info, dict) and "gateway_port" in info:

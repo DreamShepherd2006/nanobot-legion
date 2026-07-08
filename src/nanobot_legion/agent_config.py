@@ -280,7 +280,7 @@ document.getElementById('addForm').addEventListener('submit', async function(e) 
 });
 
 async function removeAgent(name) {
-  if (!confirm('确定要删除 Agent "' + name + '" 吗？\n\n其配置目录将被归档，重启空间后生效。')) return;
+  if (!confirm('确定要删除 Agent "' + name + '" 吗？\n\n其配置目录将被归档，侧边栏即时生效。')) return;
   const result = document.getElementById('result');
   result.innerHTML = '';
   try {
