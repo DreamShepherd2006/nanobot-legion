@@ -779,7 +779,7 @@ def create_agent_routes(app, gatekeeper):
             return JSONResponse({"ok": False, "error": f"未知服务商: {provider_id}"}, status_code=400)
 
         # Load current squad config
-        squad_cfg = load_config(force_reload=True)
+        squad_cfg = load_config()
         peers = squad_cfg.get("peers", {})
 
         if name in peers:
@@ -888,7 +888,7 @@ def create_agent_routes(app, gatekeeper):
 
         name = (body.get("name", "") or "").strip()
 
-        squad_cfg = load_config(force_reload=True)
+        squad_cfg = load_config()
         peers = squad_cfg.get("peers", {})
 
         if name not in peers:
@@ -988,7 +988,7 @@ def create_agent_routes(app, gatekeeper):
         if not name or not dir_name:
             return JSONResponse({"ok": False, "error": "缺少 name 或 dir_name"}, status_code=400)
 
-        squad_cfg = load_config(force_reload=True)
+        squad_cfg = load_config()
         data_root = squad_cfg.get("data_root", "/data")
         instances_dir = os.path.join(data_root, "instances")
         src_dir = os.path.join(instances_dir, dir_name)
@@ -1085,7 +1085,7 @@ def create_agent_routes(app, gatekeeper):
         if not dir_name.startswith(name + ".removed."):
             return JSONResponse({"ok": False, "error": f"dir_name '{dir_name}' 与 name '{name}' 不匹配"}, status_code=400)
 
-        squad_cfg = load_config(force_reload=True)
+        squad_cfg = load_config()
         data_root = squad_cfg.get("data_root", "/data")
         dir_path = os.path.join(data_root, "instances", dir_name)
 
@@ -1134,7 +1134,7 @@ def create_agent_routes(app, gatekeeper):
         if name == "neo":
             return JSONResponse({"ok": False, "error": "Commander (neo) 只能由 gatekeeper 管理"}, status_code=403)
 
-        squad_cfg = load_config(force_reload=True)
+        squad_cfg = load_config()
         peers = squad_cfg.get("peers", {})
         if name not in peers:
             return JSONResponse({"ok": False, "error": f"Agent '{name}' 不在 peers 列表中"}, status_code=404)
@@ -1232,7 +1232,7 @@ def create_agent_routes(app, gatekeeper):
         if name == "neo":
             return JSONResponse({"ok": False, "error": "Commander (neo) 不可停止"}, status_code=403)
 
-        squad_cfg = load_config(force_reload=True)
+        squad_cfg = load_config()
         peers = squad_cfg.get("peers", {})
         if name not in peers:
             return JSONResponse({"ok": False, "error": f"Agent '{name}' 不在 peers 列表中"}, status_code=404)
@@ -1447,7 +1447,7 @@ async function saveConfig(name) {{
         if not api_key:
             return JSONResponse({"ok": False, "error": "缺少 api_key"}, status_code=400)
 
-        squad_cfg = load_config(force_reload=True)
+        squad_cfg = load_config()
         data_root = squad_cfg.get("data_root", "/data")
         mount_path = data_root
         config_path = os.path.join(mount_path, "instances", name, "config.json")
