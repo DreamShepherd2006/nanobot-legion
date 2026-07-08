@@ -52,7 +52,7 @@ from cloud_agent_gateway.package_source import get_package_source, build_source_
 # IMPORTANT: squad_config_loader must be imported BEFORE platforms!
 # It injects DEPLOY_PLATFORM into os.environ at module level, which
 # platforms.__init__._detect() reads in its matches() step 0.
-from .squad_config_loader import get_relay_timeout  # noqa: E402
+from .squad_config_loader import get_relay_timeout, get_resurrection_whitelist  # noqa: E402
 from cloud_agent_gateway.platforms import platform  # noqa: E402
 from .agent_config import create_agent_routes  # noqa: E402
 
@@ -69,7 +69,6 @@ class Gatekeeper:
     """
 
     # ── Class constants (resurrection thresholds) ─────────────
-    RESURRECT_WHITELIST: set = {"neo"}
     RESURRECT_THRESHOLD: int = 60       # seconds offline before trigger
     RESURRECT_COOLDOWN: int = 300       # seconds before retry
     GRACE_SECONDS: int = 150            # startup grace period
@@ -135,6 +134,7 @@ class Gatekeeper:
         # ── Tokens ────────────────────────────────────────────
         self._relay_token = os.environ.get("SQUAD_RELAY_TOKEN", "").strip()
         self._relay_timeout = get_relay_timeout()
+        self._resurrection_whitelist = get_resurrection_whitelist()
 
         # ── DLQ dir ───────────────────────────────────────────
         self._dlq_dir = os.environ.get("DLQ_DIR",
@@ -620,7 +620,7 @@ Agent 生成的输出文件存放在此，可随时下载。
             return
 
         # Already offline — check if resurrection should trigger
-        if name not in self.RESURRECT_WHITELIST:
+        if name not in self._resurrection_whitelist:
             return
         if self._resurrecting.get(name):
             return

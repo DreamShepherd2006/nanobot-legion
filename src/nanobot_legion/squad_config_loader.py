@@ -152,6 +152,12 @@ def get_relay_timeout() -> int:
     return load_config().get("relay_timeout", 60)
 
 
+def get_resurrection_whitelist() -> set:
+    """Return the set of agent names that are allowed auto-resurrection."""
+    whitelist = load_config().get("resurrection_whitelist", ["neo"])
+    return set(whitelist) if isinstance(whitelist, list) else {"neo"}
+
+
 def get_deploy_platform() -> str:
     return (load_config().get("deploy_platform") or os.environ.get("DEPLOY_PLATFORM") or "").strip()
 
