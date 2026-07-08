@@ -677,6 +677,32 @@ def _render_archived_table(archived: list[dict]) -> str:
             + "\n".join(rows) + "</table>")
 
 
+def _kill_agent_process(gw_port: int) -> list[int]:
+    """Kill all processes listening on a gateway port by scanning /proc/{pid}/cmdline.
+    Returns list of killed PIDs."""
+    killed = []
+    try:
+        for pid_dir in os.listdir("/proc"):
+            if not pid_dir.isdigit():
+                continue
+            try:
+                with open(f"/proc/{pid_dir}/cmdline", "rb") as f:
+                    cmdline = f.read()
+                # Match --port N (the port must appear as a standalone arg after --port)
+                port_bytes = str(gw_port).encode()
+                if b"--port" in cmdline and port_bytes in cmdline:
+                    pid = int(pid_dir)
+                    os.kill(pid, signal.SIGTERM)
+                    killed.append(pid)
+            except (OSError, PermissionError, ValueError):
+                pass
+    except OSError:
+        pass
+    if killed:
+        print(f"[agent_config] 🔫 已 kill (SIGTERM) PIDs: {killed} (port {gw_port})", flush=True)
+    return killed
+
+
 def _sync_roster(gatekeeper, squad_cfg: dict):
     """Refresh gatekeeper roster from squad_config.json peers after config change."""
     gatekeeper._refresh_roster()
@@ -890,16 +916,30 @@ def create_agent_routes(app, gatekeeper):
                 status_code=500,
             )
 
-        # Archive agent directory (rename instead of delete for safety)
+        # Archive agent directory — kill process first to release file handles
         data_root = squad_cfg.get("data_root", "/data")
         agent_dir = os.path.join(data_root, "instances", name)
+
+        gw_port = info.get("gateway_port", 0)
+        if gw_port:
+            _kill_agent_process(gw_port)
+            # Wait up to 3s for process to exit
+            for _ in range(30):
+                running_now = _detect_running_agents(squad_cfg)
+                if name not in running_now:
+                    break
+                time.sleep(0.1)
+
         if os.path.exists(agent_dir):
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             archived_dir = os.path.join(data_root, "instances", f"{name}.removed.{ts}")
             try:
                 shutil.move(agent_dir, archived_dir)
+                print(f"[agent_config] 📦 Agent '{name}' 已归档 → {archived_dir}", flush=True)
             except OSError as e:
                 print(f"[agent_config] ⚠️  归档 '{name}' 目录失败: {e}，已移除 peer", flush=True)
+        else:
+            print(f"[agent_config] ⚠️  Agent '{name}' 目录不存在: {agent_dir}", flush=True)
 
         _sync_roster(gatekeeper, squad_cfg)
 
@@ -1178,22 +1218,7 @@ def create_agent_routes(app, gatekeeper):
         if not gw_port:
             return JSONResponse({"ok": False, "error": "无法确定 agent 端口"}, status_code=500)
 
-        # Find and kill process by port
-        killed = []
-        try:
-            for pid_dir in os.listdir("/proc"):
-                if not pid_dir.isdigit():
-                    continue
-                try:
-                    with open(f"/proc/{pid_dir}/cmdline", "rb") as f:
-                        if str(gw_port).encode() in f.read():
-                            pid = int(pid_dir)
-                            os.kill(pid, signal.SIGTERM)
-                            killed.append(pid)
-                except (OSError, PermissionError, ValueError):
-                    pass
-        except OSError:
-            pass
+        killed = _kill_agent_process(gw_port)
 
         # Remove from resurrection whitelist
         whitelist = list(squad_cfg.get("resurrection_whitelist", ["neo"]))
