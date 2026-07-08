@@ -146,6 +146,8 @@ _HTML = r"""\
   .rez-on:hover { background:#ffebee; border-color:#e53935; color:#c62828; }
   .rez-off { background:#f5f5f5; border:1px solid #ccc; color:#555; padding:4px 10px; font-size:.75em; cursor:pointer; border-radius:4px; }
   .rez-off:hover { background:#e8f5e9; border-color:#4caf50; color:#2e7d32; }
+  .agent-link { color: #1a56db; text-decoration: none; }
+  .agent-link:hover { text-decoration: underline; }
   .archived-row td { color:#888; }
 </style>
 </head>
@@ -452,6 +454,11 @@ def _escape_js(s: str) -> str:
     return s.replace("\\", "\\\\").replace("'", "\\'")
 
 
+def _escape_html(s: str) -> str:
+    """Escape a string for safe embedding in HTML."""
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
 def _get_listening_ports() -> set[int]:
     """Return ports currently in LISTEN state from /proc/net/tcp and /proc/net/tcp6."""
     used = set()
@@ -621,6 +628,9 @@ def _render_running_table(squad_cfg: dict, running: dict[str, bool]) -> str:
         status_icon = "🟢" if is_up else "⚪"
         tag = '<span class="tag tag-cmd">Commander</span>' if is_cmd else '<span class="tag tag-work">Worker</span>'
 
+        # Printable name with link to detail page
+        name_link = f'<a class="agent-link" href="/config/agents/{name}">{name}</a>'
+
         # Resurrection toggle
         if is_cmd:
             rez = "🔒"
@@ -633,7 +643,7 @@ def _render_running_table(squad_cfg: dict, running: dict[str, bool]) -> str:
             action = ""
         else:
             action = f'<button class="del-btn" onclick="removeAgent(\'{name}\')">删除</button>'
-        rows.append(f"<tr><td>{status_icon} {name} {tag}</td><td>{gw}/{ws}</td><td>{rez}</td><td>{action}</td></tr>")
+        rows.append(f"<tr><td>{status_icon} {name_link} {tag}</td><td>{gw}/{ws}</td><td>{rez}</td><td>{action}</td></tr>")
 
     return ("<table><tr><th>Agent</th><th>端口 (gw/ws)</th><th>启停</th><th>操作</th></tr>"
             + "\n".join(rows) + "</table>")
@@ -1198,6 +1208,223 @@ def create_agent_routes(app, gatekeeper):
                 "msg": f"未找到 Agent '{name}' (port {gw_port}) 的运行进程。已移出复活白名单。",
             })
 
+    async def _agent_detail(request: Request):
+        """GET /config/agents/{name} — detail/edit page for an agent."""
+        _user = request.session.get("user")
+        if not _user:
+            return HTMLResponse("<h3>请先登录</h3>", status_code=401)
+
+        name = request.path_params.get("name", "")
+        if not name or name in ("add", "remove", "restore", "delete-permanent", "start", "stop"):
+            return HTMLResponse("<h3>Agent 不存在</h3>", status_code=404)
+
+        squad_cfg = load_config(force_reload=True)
+        peers = squad_cfg.get("peers", {})
+        if name not in peers:
+            return HTMLResponse(f"<h3>Agent '{name}' 不在编制中</h3>", status_code=404)
+
+        data_root = squad_cfg.get("data_root", "/data")
+        mount_path = data_root
+        config_path = os.path.join(mount_path, "instances", name, "config.json")
+
+        try:
+            with open(config_path) as f:
+                cfg = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return HTMLResponse(f"<h3>无法读取 {name} 的配置</h3>", status_code=500)
+
+        # Extract current values
+        agents = cfg.get("agents", {})
+        defaults = agents.get("defaults", {}) if isinstance(agents, dict) else {}
+        cur_provider = defaults.get("provider", "") or ""
+        cur_model = defaults.get("model", "") or ""
+        cur_api_key = ""
+        providers = cfg.get("providers", {})
+        if isinstance(providers, dict) and cur_provider in providers:
+            cur_api_key = providers[cur_provider].get("api_key", "") or ""
+
+        gw = cfg.get("gateway", {}).get("port", "?") if isinstance(cfg.get("gateway"), dict) else "?"
+        ws_port = "?"
+        channels = cfg.get("channels", {})
+        if isinstance(channels, dict):
+            ws_cfg = channels.get("websocket", {})
+            if isinstance(ws_cfg, dict):
+                ws_port = ws_cfg.get("port", "?")
+
+        # Build provider options
+        provider_options = ['<option value="">— 选择服务商 —</option>']
+        for spec in _get_setup_providers():
+            sel = ' selected' if spec.name == cur_provider else ''
+            provider_options.append(f'<option value="{spec.name}"{sel}>{spec.label}</option>')
+
+        # Build preset JS data
+        p_entries = []
+        for spec in _get_setup_providers():
+            models = _PROVIDER_MODELS.get(spec.name, [])
+            models_json = json.dumps(models)
+            p_entries.append(f'"{spec.name}": {{models: {models_json}}}')
+        presets_js = "{" + ", ".join(p_entries) + "}"
+
+        provider_options_html = "\n".join(provider_options)
+
+        is_cmd = peers.get(name, {}).get("id") == "squad:commander"
+
+        return HTMLResponse(f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{name} — 配置</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width:600px; margin:20px auto; padding:0 16px; color:#222; }}
+  h2 {{ margin-bottom:4px; font-size:1.3em; }}
+  .subtle {{ color:#888; font-size:.85em; margin-bottom:20px; }}
+  label {{ display:block; font-weight:600; margin-top:14px; margin-bottom:4px; font-size:.9em; }}
+  input, select {{ width:100%; box-sizing:border-box; padding:8px 10px; border:1px solid #ccc; border-radius:6px; font-size:.95em; }}
+  input:focus, select:focus {{ outline:none; border-color:#4f46e5; box-shadow:0 0 0 3px rgba(79,70,229,.15); }}
+  .row {{ display:flex; gap:16px; }}
+  .row > div {{ flex:1; }}
+  .ro {{ background:#f9fafb; color:#666; }}
+  .btn {{ background:#4f46e5; color:#fff; border:none; padding:10px 24px; font-size:.95em; border-radius:6px; cursor:pointer; margin-top:18px; }}
+  .btn:hover {{ background:#4338ca; }}
+  .back {{ color:#888; font-size:.85em; }}
+</style>
+</head>
+<body>
+<h2>⚙️ {name} {('Commander' if is_cmd else 'Worker')}</h2>
+<p class="subtle">修改后需在 Agent 管理页手动启停生效。</p>
+
+<label>服务商</label>
+<select id="provider">{provider_options_html}</select>
+
+<label>API Key</label>
+<input type="password" id="api_key" value="{_escape_html(cur_api_key)}" placeholder="sk-...">
+
+<div class="row">
+  <div><label>模型</label><input type="text" id="model" value="{_escape_html(cur_model)}" placeholder="模型标识"></div>
+  <div><label>gateway 端口</label><input class="ro" type="text" value="{gw}" readonly></div>
+  <div><label>ws 端口</label><input class="ro" type="text" value="{ws_port}" readonly></div>
+</div>
+
+<button class="btn" onclick="saveConfig('{_escape_js(name)}')">保存</button>
+<div id="result"></div>
+
+<p><a class="back" href="/config/agents">← 返回 Agent 管理</a></p>
+
+<script>
+var _presets = {presets_js};
+var _curApiKey = {json.dumps(cur_api_key)};
+
+// Fill model on provider change
+(function() {{
+  var sel = document.getElementById('provider');
+  var modelInp = document.getElementById('model');
+  function updateModel() {{
+    var p = sel.value;
+    var pk = document.getElementById('api_key');
+    if (p && _presets[p] && _presets[p].models.length > 0) {{
+      modelInp.value = _presets[p].models[0];
+    }}
+    // Keep current key unless provider changed from original
+  }}
+  sel.addEventListener('change', updateModel);
+  // On first load, ensure model matches provider
+  if (!modelInp.value && sel.value && _presets[sel.value]) {{
+    modelInp.value = _presets[sel.value].models[0] || '';
+  }}
+}})();
+
+async function saveConfig(name) {{
+  var result = document.getElementById('result');
+  result.innerHTML = '';
+  var provider = document.getElementById('provider').value;
+  var api_key = document.getElementById('api_key').value;
+  var model = document.getElementById('model').value;
+  if (!provider) {{ result.innerHTML = '<div style="color:#c62828;margin-top:12px">❌ 请选择服务商</div>'; return; }}
+  if (!api_key) {{ result.innerHTML = '<div style="color:#c62828;margin-top:12px">❌ 请输入 API Key</div>'; return; }}
+  try {{
+    var resp = await fetch('/config/agents/' + name + '/save', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{provider: provider, api_key: api_key, model: model}})
+    }});
+    var data = await resp.json();
+    if (data.ok) {{
+      result.innerHTML = '<div style="color:#2e7d32;margin-top:12px">✅ ' + data.msg + '</div>';
+    }} else {{
+      result.innerHTML = '<div style="color:#c62828;margin-top:12px">❌ ' + data.error + '</div>';
+    }}
+  }} catch(err) {{
+    result.innerHTML = '<div style="color:#c62828;margin-top:12px">❌ 保存失败: ' + err.message + '</div>';
+  }}
+}}
+</script>
+</body>
+</html>""")
+
+    async def _save_agent_detail(request: Request):
+        """POST /config/agents/{name}/save — update agent config.json."""
+        _user = request.session.get("user")
+        if not _user:
+            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+
+        name = request.path_params.get("name", "")
+        if not name:
+            return JSONResponse({"ok": False, "error": "无效路径"}, status_code=400)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "无效的请求格式"}, status_code=400)
+
+        provider = (body.get("provider", "") or "").strip()
+        api_key = (body.get("api_key", "") or "").strip()
+        model = (body.get("model", "") or "").strip()
+
+        if not provider:
+            return JSONResponse({"ok": False, "error": "缺少 provider"}, status_code=400)
+        if not api_key:
+            return JSONResponse({"ok": False, "error": "缺少 api_key"}, status_code=400)
+
+        squad_cfg = load_config(force_reload=True)
+        data_root = squad_cfg.get("data_root", "/data")
+        mount_path = data_root
+        config_path = os.path.join(mount_path, "instances", name, "config.json")
+
+        try:
+            with open(config_path) as f:
+                cfg = json.load(f)
+        except FileNotFoundError:
+            return JSONResponse({"ok": False, "error": f"Agent '{name}' 的 config.json 不存在"}, status_code=404)
+        except json.JSONDecodeError:
+            return JSONResponse({"ok": False, "error": "config.json 格式错误"}, status_code=500)
+
+        # Update agents.defaults
+        agents = cfg.setdefault("agents", {})
+        agents.setdefault("defaults", {})
+        agents["defaults"]["provider"] = provider
+        agents["defaults"]["model"] = model or provider
+
+        # Update provider api_key
+        providers = cfg.setdefault("providers", {})
+        providers.setdefault(provider, {})
+        if isinstance(providers[provider], dict):
+            providers[provider]["api_key"] = api_key
+        else:
+            providers[provider] = {"api_key": api_key}
+
+        # Write back
+        try:
+            with open(config_path, "w") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
+        except OSError as e:
+            return JSONResponse({"ok": False, "error": f"写入失败: {e}"}, status_code=500)
+
+        return JSONResponse({
+            "ok": True,
+            "msg": f"Agent '{name}' 配置已更新。返回管理页后可用「停止→启动」使其生效。",
+        })
+
     # Mount routes
     app.get("/config/agents")(_agent_page)
     app.post("/config/agents/add")(_add_agent)
@@ -1206,3 +1433,5 @@ def create_agent_routes(app, gatekeeper):
     app.post("/config/agents/delete-permanent")(_delete_permanent_agent)
     app.post("/config/agents/start")(_start_agent)
     app.post("/config/agents/stop")(_stop_agent)
+    app.get("/config/agents/{name}")(_agent_detail)
+    app.post("/config/agents/{name}/save")(_save_agent_detail)
