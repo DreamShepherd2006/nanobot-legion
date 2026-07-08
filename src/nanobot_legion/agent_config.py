@@ -528,8 +528,13 @@ def _detect_running_agents(squad_cfg: dict) -> dict[str, bool]:
 
 
 def _find_archived_agents(squad_cfg: dict) -> list[dict]:
-    """Find archived agent directories (.removed.*) and return metadata list."""
+    """Find archived agent directories (.removed.*) and return metadata list.
+
+    Filters out agents that are already in the active peers list.
+    """
     data_root = squad_cfg.get("data_root", "/data")
+    peers = squad_cfg.get("peers", {})
+    active_names = set(peers.keys())
     instances_dir = os.path.join(data_root, "instances")
     archived = []
     try:
@@ -569,6 +574,9 @@ def _find_archived_agents(squad_cfg: dict) -> list[dict]:
             })
     except OSError:
         pass
+
+    # Filter out agents already in active peers
+    archived = [a for a in archived if a["name"] not in active_names]
 
     archived.sort(key=lambda x: x.get("name", ""))
     return archived
@@ -715,6 +723,19 @@ def create_agent_routes(app, gatekeeper):
 
         if name in peers:
             return JSONResponse({"ok": False, "error": f"Agent '{name}' 已存在"}, status_code=409)
+
+        # Check if archived copy exists — reject, guide user to restore
+        data_root = squad_cfg.get("data_root", "/data")
+        archived_dir = os.path.join(data_root, "instances", f"{name}.removed.")
+        try:
+            for entry in os.listdir(os.path.join(data_root, "instances")):
+                if entry.startswith(f"{name}.removed.") and os.path.isdir(os.path.join(data_root, "instances", entry)):
+                    return JSONResponse(
+                        {"ok": False, "error": f"Agent '{name}' 的归档目录已存在（{entry}），请在📦已归档中使用「恢复」。"},
+                        status_code=409,
+                    )
+        except OSError:
+            pass
 
         # Read neo config for fallback providers
         neo_cfg = _get_neo_config(squad_cfg)
