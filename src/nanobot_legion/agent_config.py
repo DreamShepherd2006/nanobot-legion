@@ -923,21 +923,44 @@ def create_agent_routes(app, gatekeeper):
         gw_port = info.get("gateway_port", 0)
         if gw_port:
             _kill_agent_process(gw_port)
-            # Wait up to 3s for process to exit
-            for _ in range(30):
-                running_now = _detect_running_agents(squad_cfg)
-                if name not in running_now:
+            # Wait up to 5s for process to exit (scan /proc directly by port)
+            port_bytes = str(gw_port).encode()
+            for attempt in range(50):
+                alive = False
+                try:
+                    for pid_dir in os.listdir("/proc"):
+                        if not pid_dir.isdigit():
+                            continue
+                        try:
+                            with open(f"/proc/{pid_dir}/cmdline", "rb") as f:
+                                if port_bytes in f.read():
+                                    alive = True
+                                    break
+                        except (OSError, PermissionError):
+                            pass
+                except OSError:
+                    pass
+                if not alive:
                     break
                 time.sleep(0.1)
 
         if os.path.exists(agent_dir):
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             archived_dir = os.path.join(data_root, "instances", f"{name}.removed.{ts}")
+            moved = False
             try:
                 shutil.move(agent_dir, archived_dir)
+                moved = True
+            except OSError:
+                # If move fails (e.g. cross-device), try copy + delete
+                try:
+                    shutil.copytree(agent_dir, archived_dir)
+                    shutil.rmtree(agent_dir)
+                    moved = True
+                except OSError as e2:
+                    print(f"[agent_config] ⚠️  归档 '{name}' 目录失败: {e2}，已移除 peer", flush=True)
+            if moved:
                 print(f"[agent_config] 📦 Agent '{name}' 已归档 → {archived_dir}", flush=True)
-            except OSError as e:
-                print(f"[agent_config] ⚠️  归档 '{name}' 目录失败: {e}，已移除 peer", flush=True)
         else:
             print(f"[agent_config] ⚠️  Agent '{name}' 目录不存在: {agent_dir}", flush=True)
 
