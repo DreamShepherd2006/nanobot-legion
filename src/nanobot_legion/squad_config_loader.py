@@ -129,6 +129,23 @@ def _env_override(config: dict):
                 pass
 
 
+def save_config(config: dict | None = None) -> None:
+    """原子写入 squad_config.json。先写临时文件，再 os.replace（POSIX 原子 rename）。
+
+    不传 config 时默认写当前 _config_cache。
+    """
+    global _config_cache
+    if config is None:
+        config = _config_cache
+    if config is None:
+        config = load_config()
+    path = _get_config_path()
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
 # ── 便捷存取 ────────────────────────────────────────────
 
 def get_peers() -> dict:

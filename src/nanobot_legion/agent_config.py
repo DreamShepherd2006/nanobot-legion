@@ -10,7 +10,7 @@ import datetime, json, os, shutil, signal, subprocess, time
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
-from .squad_config_loader import load_config, _get_config_path
+from .squad_config_loader import load_config, save_config
 
 # ── provider registry (from official nanobot) ───────────────────────
 try:
@@ -857,10 +857,8 @@ def create_agent_routes(app, gatekeeper):
         peers[name] = {"id": f"squad:{name}", "gateway_port": gw, "ws_port": ws}
         squad_cfg["peers"] = peers
 
-        config_path_sc = _get_config_path()
         try:
-            with open(config_path_sc, "w") as f:
-                json.dump(squad_cfg, f, indent=2, ensure_ascii=False)
+            save_config(squad_cfg)
         except OSError as e:
             return JSONResponse(
                 {"ok": True, "msg": f"Agent '{name}' 配置已创建 (端口 {gw}/{ws})，但 squad_config 更新失败: {e}。请手动添加 peer 或重启后用 /reset-setup 重建。"},
@@ -906,10 +904,8 @@ def create_agent_routes(app, gatekeeper):
         squad_cfg["peers"] = peers
 
         # Persist squad_config.json
-        config_path_sc = _get_config_path()
         try:
-            with open(config_path_sc, "w") as f:
-                json.dump(squad_cfg, f, indent=2, ensure_ascii=False)
+            save_config(squad_cfg)
         except OSError as e:
             return JSONResponse(
                 {"ok": False, "error": f"squad_config 更新失败: {e}"},
@@ -1047,10 +1043,8 @@ def create_agent_routes(app, gatekeeper):
         squad_cfg["peers"] = peers
 
         # Persist
-        config_path_sc = _get_config_path()
         try:
-            with open(config_path_sc, "w") as f:
-                json.dump(squad_cfg, f, indent=2, ensure_ascii=False)
+            save_config(squad_cfg)
         except OSError as e:
             return JSONResponse(
                 {"ok": True, "msg": f"Agent '{name}' 目录已恢复（端口 {peers[name]['gateway_port']}/{peers[name]['ws_port']}），但 squad_config 更新失败: {e}。"},
@@ -1099,10 +1093,8 @@ def create_agent_routes(app, gatekeeper):
         if name in whitelist:
             whitelist.remove(name)
             squad_cfg["resurrection_whitelist"] = whitelist
-            config_path_sc = _get_config_path()
             try:
-                with open(config_path_sc, "w") as f:
-                    json.dump(squad_cfg, f, indent=2, ensure_ascii=False)
+                save_config(squad_cfg)
             except OSError:
                 pass
 
@@ -1202,10 +1194,8 @@ def create_agent_routes(app, gatekeeper):
             whitelist.append(name)
         squad_cfg["resurrection_whitelist"] = whitelist
 
-        config_path_sc = _get_config_path()
         try:
-            with open(config_path_sc, "w") as f:
-                json.dump(squad_cfg, f, indent=2, ensure_ascii=False)
+            save_config(squad_cfg)
         except OSError:
             pass  # Non-fatal; agent is already running
 
@@ -1251,10 +1241,8 @@ def create_agent_routes(app, gatekeeper):
             whitelist.remove(name)
         squad_cfg["resurrection_whitelist"] = whitelist
 
-        config_path_sc = _get_config_path()
         try:
-            with open(config_path_sc, "w") as f:
-                json.dump(squad_cfg, f, indent=2, ensure_ascii=False)
+            save_config(squad_cfg)
         except OSError:
             pass
 
