@@ -677,6 +677,12 @@ def _render_archived_table(archived: list[dict]) -> str:
             + "\n".join(rows) + "</table>")
 
 
+def _sync_roster(gatekeeper, squad_cfg: dict):
+    """Refresh gatekeeper roster from squad_config.json peers after config change."""
+    gatekeeper._refresh_roster()
+    gatekeeper._init_http_pool()
+
+
 # ── Route Handlers ─────────────────────────────────────────
 
 def create_agent_routes(app, gatekeeper):
@@ -835,6 +841,9 @@ def create_agent_routes(app, gatekeeper):
                 status_code=201
             )
 
+        _sync_roster(gatekeeper, squad_cfg)
+        result["msg"] += " WebUI 侧边栏已同步。"
+
         return JSONResponse(
             {"ok": True, "msg": f"Agent '{name}' 已添加 (网关: {gw}, WS: {ws}, provider: {provider_id})，重启空间后生效"},
             status_code=201
@@ -892,9 +901,11 @@ def create_agent_routes(app, gatekeeper):
             except OSError as e:
                 print(f"[agent_config] ⚠️  归档 '{name}' 目录失败: {e}，已移除 peer", flush=True)
 
+        _sync_roster(gatekeeper, squad_cfg)
+
         return JSONResponse({
             "ok": True,
-            "msg": f"Agent '{name}' 已删除。配置已归档，重启空间后生效。",
+            "msg": f"Agent '{name}' 已删除。配置已归档，WebUI 侧边栏已更新。",
         })
 
     async def _restore_agent(request: Request):
@@ -983,9 +994,11 @@ def create_agent_routes(app, gatekeeper):
                 status_code=201
             )
 
+        _sync_roster(gatekeeper, squad_cfg)
+
         return JSONResponse({
             "ok": True,
-            "msg": f"Agent '{name}' 已恢复（端口 {peers[name]['gateway_port']}/{peers[name]['ws_port']}），已加入复活白名单。重启空间后生效。",
+            "msg": f"Agent '{name}' 已恢复（端口 {peers[name]['gateway_port']}/{peers[name]['ws_port']}），已加入复活白名单。WebUI 侧边栏已更新。",
         })
 
     async def _delete_permanent_agent(request: Request):

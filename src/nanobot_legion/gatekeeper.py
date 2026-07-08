@@ -52,7 +52,7 @@ from cloud_agent_gateway.package_source import get_package_source, build_source_
 # IMPORTANT: squad_config_loader must be imported BEFORE platforms!
 # It injects DEPLOY_PLATFORM into os.environ at module level, which
 # platforms.__init__._detect() reads in its matches() step 0.
-from .squad_config_loader import get_relay_timeout, get_resurrection_whitelist  # noqa: E402
+from .squad_config_loader import get_relay_timeout, get_resurrection_whitelist, load_config  # noqa: E402
 from cloud_agent_gateway.platforms import platform  # noqa: E402
 from .agent_config import create_agent_routes  # noqa: E402
 
@@ -311,31 +311,25 @@ Agent 生成的输出文件存放在此，可随时下载。
         self._log(f"📌 pinned binding chat ({_cid[:12]}...) — {len(_bindings)} channels")
 
     # ═══════════════════════════════════════════════════════════
-    # [Section 2] Roster parsing — NANOBOT_PEER_* → squad_roster
+    # [Section 2] Roster — squad_config.json peers as source of truth
     # ═══════════════════════════════════════════════════════════
 
     def _refresh_roster(self):
-        """Parse NANOBOT_PEER_* env vars to build agent roster."""
+        """Read squad_config.json peers to build agent roster."""
         self.agent_names.clear()
         self.squad_roster.clear()
         self.peer_env_map.clear()
 
-        for key, val in os.environ.items():
-            if not key.startswith("NANOBOT_PEER_"):
-                continue
-            self.peer_env_map[key] = val
-            agent_name = key[len("NANOBOT_PEER_"):].lower()
-            try:
-                info = json.loads(val)
-                if isinstance(info, dict) and "id" in info:
-                    self.agent_names.append(agent_name)
-                    self.squad_roster[agent_name] = {
-                        "id": info["id"],
-                        "gateway_port": info.get("gateway_port", 0),
-                        "ws_port": info.get("ws_port", 0),
-                    }
-            except (json.JSONDecodeError, TypeError):
-                self._log(f"⚠️ 跳过无效 NANOBOT_PEER_*: {key}")
+        cfg = load_config()
+        peers = cfg.get("peers", {})
+        for name, info in peers.items():
+            if isinstance(info, dict) and "gateway_port" in info:
+                self.agent_names.append(name)
+                self.squad_roster[name] = {
+                    "id": info.get("id", f"squad:{name}"),
+                    "gateway_port": info.get("gateway_port", 0),
+                    "ws_port": info.get("ws_port", 0),
+                }
 
         self.agent_names.sort()
         self._log(f"📋 编制加载: {len(self.agent_names)} agents → {self.agent_names}")
