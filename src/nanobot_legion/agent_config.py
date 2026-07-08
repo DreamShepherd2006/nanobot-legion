@@ -140,6 +140,8 @@ _HTML = r"""\
   .ok { background:#e8f5e9; border:1px solid #a5d6a7; color:#2e7d32; border-radius:6px; padding:12px; margin:16px 0; font-size:.88em; }
   .del-btn { background:none; border:1px solid #ccc; color:#999; padding:4px 10px; font-size:.8em; cursor:pointer; border-radius:4px; margin-left:8px; }
   .del-btn:hover { border-color:#e53935; color:#e53935; }
+  .restore-btn { background:none; border:1px solid #4caf50; color:#4caf50; padding:4px 10px; font-size:.8em; cursor:pointer; border-radius:4px; }
+  .restore-btn:hover { background:#e8f5e9; }
   .archived-row td { color:#888; }
 </style>
 </head>
@@ -278,6 +280,49 @@ async function removeAgent(name) {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({name: name})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      result.innerHTML = '<div class="ok">✅ ' + data.msg + '</div>';
+      setTimeout(() => { window.location.reload(); }, 1500);
+    } else {
+      result.innerHTML = '<div class="err">❌ ' + data.error + '</div>';
+    }
+  } catch(err) {
+    result.innerHTML = '<div class="err">❌ 提交失败: ' + err.message + '</div>';
+  }
+}
+async function restoreAgent(name, dirName) {
+  if (!confirm('确定要恢复 Agent "' + name + '" 吗？\n\n目录将恢复，并加入复活白名单。重启空间后生效。')) return;
+  const result = document.getElementById('result');
+  result.innerHTML = '';
+  try {
+    const resp = await fetch('/config/agents/restore', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name, dir_name: dirName})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      result.innerHTML = '<div class="ok">✅ ' + data.msg + '</div>';
+      setTimeout(() => { window.location.reload(); }, 1500);
+    } else {
+      result.innerHTML = '<div class="err">❌ ' + data.error + '</div>';
+    }
+  } catch(err) {
+    result.innerHTML = '<div class="err">❌ 提交失败: ' + err.message + '</div>';
+  }
+}
+
+async function deletePermanent(name, dirName) {
+  if (!confirm('⚠️ 永久删除 Agent "' + name + '"？\n\n此操作不可撤销，配置目录将被彻底删除。')) return;
+  const result = document.getElementById('result');
+  result.innerHTML = '';
+  try {
+    const resp = await fetch('/config/agents/delete-permanent', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name, dir_name: dirName})
     });
     const data = await resp.json();
     if (data.ok) {
@@ -541,11 +586,16 @@ def _render_archived_table(archived: list[dict]) -> str:
         model = a.get("model") or "—"
         ts = a.get("timestamp", "")
         ts_display = ts[:8] if len(ts) >= 8 else ts
+        dir_name_esc = _escape_js(a["dir_name"])
+        name_esc = _escape_js(name)
         rows.append(
             f"<tr class=\"archived-row\"><td>📦 {name}</td>"
             f"<td>{provider}</td><td style='max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>{model}</td>"
             f"<td style='font-size:.8em;color:#999'>{ts_display}</td>"
-            f"<td></td></tr>"
+            f"<td>"
+            f"<button class=\"restore-btn\" onclick=\"restoreAgent('{name_esc}','{dir_name_esc}')\">恢复</button>"
+            f"<button class=\"del-btn\" onclick=\"deletePermanent('{name_esc}','{dir_name_esc}')\">🗑️</button>"
+            f"</td></tr>"
         )
 
     return ("<table><tr><th>Agent</th><th>Provider</th><th>Model</th><th>归档时间</th><th>操作</th></tr>"
@@ -759,7 +809,153 @@ def create_agent_routes(app, gatekeeper):
             "msg": f"Agent '{name}' 已删除。配置已归档，重启空间后生效。",
         })
 
+    async def _restore_agent(request: Request):
+        """POST /config/agents/restore — restore an archived agent."""
+        _user = request.session.get("user")
+        if not _user:
+            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "无效的请求格式"}, status_code=400)
+
+        name = (body.get("name", "") or "").strip()
+        dir_name = (body.get("dir_name", "") or "").strip()
+
+        if not name or not dir_name:
+            return JSONResponse({"ok": False, "error": "缺少 name 或 dir_name"}, status_code=400)
+
+        squad_cfg = load_config(force_reload=True)
+        data_root = squad_cfg.get("data_root", "/data")
+        instances_dir = os.path.join(data_root, "instances")
+        src_dir = os.path.join(instances_dir, dir_name)
+        dst_dir = os.path.join(instances_dir, name)
+
+        # Security: ensure dir_name matches the pattern name.removed.*
+        if not dir_name.startswith(name + ".removed."):
+            return JSONResponse({"ok": False, "error": f"dir_name '{dir_name}' 与 name '{name}' 不匹配"}, status_code=400)
+
+        if not os.path.isdir(src_dir):
+            return JSONResponse({"ok": False, "error": f"归档目录 '{dir_name}' 不存在"}, status_code=404)
+
+        if os.path.exists(dst_dir):
+            return JSONResponse({"ok": False, "error": f"Agent '{name}' 目录已存在（可能已恢复或正在运行）"}, status_code=409)
+
+        peers = squad_cfg.get("peers", {})
+        if name in peers:
+            return JSONResponse({"ok": False, "error": f"Agent '{name}' 已在 peers 列表中"}, status_code=409)
+
+        # Read archived config for port info
+        gw = 0
+        ws = 0
+        config_path = os.path.join(src_dir, "config.json")
+        try:
+            with open(config_path) as f:
+                cfg = json.load(f)
+            gateway = cfg.get("gateway", {})
+            if isinstance(gateway, dict):
+                gw = gateway.get("port", 0)
+            channels = cfg.get("channels", {})
+            ws_cfg = channels.get("websocket", {}) if isinstance(channels, dict) else {}
+            ws = ws_cfg.get("port", 0) if isinstance(ws_cfg, dict) else 0
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+
+        # Rename directory back
+        try:
+            shutil.move(src_dir, dst_dir)
+        except OSError as e:
+            return JSONResponse({"ok": False, "error": f"恢复目录失败: {e}"}, status_code=500)
+
+        # Add back to peers
+        if isinstance(gw, (int, float)) and gw > 0 and isinstance(ws, (int, float)) and ws > 0:
+            peers[name] = {"id": f"squad:{name}", "gateway_port": int(gw), "ws_port": int(ws)}
+        else:
+            gw, ws = _allocate_ports(peers)
+            peers[name] = {"id": f"squad:{name}", "gateway_port": gw, "ws_port": ws}
+
+        # Add to resurrection whitelist
+        whitelist = list(squad_cfg.get("resurrection_whitelist", ["neo"]))
+        if not isinstance(whitelist, list):
+            whitelist = list(whitelist) if hasattr(whitelist, '__iter__') else ["neo"]
+        if name not in whitelist:
+            whitelist.append(name)
+        squad_cfg["resurrection_whitelist"] = whitelist
+        squad_cfg["peers"] = peers
+
+        # Persist
+        config_path_sc = _get_config_path()
+        try:
+            with open(config_path_sc, "w") as f:
+                json.dump(squad_cfg, f, indent=2, ensure_ascii=False)
+        except OSError as e:
+            return JSONResponse(
+                {"ok": True, "msg": f"Agent '{name}' 目录已恢复（端口 {peers[name]['gateway_port']}/{peers[name]['ws_port']}），但 squad_config 更新失败: {e}。"},
+                status_code=201
+            )
+
+        return JSONResponse({
+            "ok": True,
+            "msg": f"Agent '{name}' 已恢复（端口 {peers[name]['gateway_port']}/{peers[name]['ws_port']}），已加入复活白名单。重启空间后生效。",
+        })
+
+    async def _delete_permanent_agent(request: Request):
+        """POST /config/agents/delete-permanent — permanently delete an archived agent."""
+        _user = request.session.get("user")
+        if not _user:
+            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "无效的请求格式"}, status_code=400)
+
+        name = (body.get("name", "") or "").strip()
+        dir_name = (body.get("dir_name", "") or "").strip()
+
+        if not name or not dir_name:
+            return JSONResponse({"ok": False, "error": "缺少 name 或 dir_name"}, status_code=400)
+
+        # Security: ensure dir_name matches the pattern name.removed.*
+        if not dir_name.startswith(name + ".removed."):
+            return JSONResponse({"ok": False, "error": f"dir_name '{dir_name}' 与 name '{name}' 不匹配"}, status_code=400)
+
+        squad_cfg = load_config(force_reload=True)
+        data_root = squad_cfg.get("data_root", "/data")
+        dir_path = os.path.join(data_root, "instances", dir_name)
+
+        if not os.path.isdir(dir_path):
+            return JSONResponse({"ok": False, "error": f"归档目录 '{dir_name}' 不存在"}, status_code=404)
+
+        # Remove from resurrection whitelist if present
+        whitelist = list(squad_cfg.get("resurrection_whitelist", []))
+        if not isinstance(whitelist, list):
+            whitelist = list(whitelist) if hasattr(whitelist, '__iter__') else []
+        if name in whitelist:
+            whitelist.remove(name)
+            squad_cfg["resurrection_whitelist"] = whitelist
+            config_path_sc = _get_config_path()
+            try:
+                with open(config_path_sc, "w") as f:
+                    json.dump(squad_cfg, f, indent=2, ensure_ascii=False)
+            except OSError:
+                pass
+
+        # Permanently delete
+        try:
+            shutil.rmtree(dir_path)
+        except OSError as e:
+            return JSONResponse({"ok": False, "error": f"删除目录失败: {e}"}, status_code=500)
+
+        return JSONResponse({
+            "ok": True,
+            "msg": f"Agent '{name}' 已永久删除。",
+        })
+
     # Mount routes
     app.get("/config/agents")(_agent_page)
     app.post("/config/agents/add")(_add_agent)
     app.post("/config/agents/remove")(_remove_agent)
+    app.post("/config/agents/restore")(_restore_agent)
+    app.post("/config/agents/delete-permanent")(_delete_permanent_agent)
