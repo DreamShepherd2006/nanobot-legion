@@ -142,6 +142,10 @@ _HTML = r"""\
   .del-btn:hover { border-color:#e53935; color:#e53935; }
   .restore-btn { background:none; border:1px solid #4caf50; color:#4caf50; padding:4px 10px; font-size:.8em; cursor:pointer; border-radius:4px; }
   .restore-btn:hover { background:#e8f5e9; }
+  .rez-on { background:#e8f5e9; border:1px solid #4caf50; color:#2e7d32; padding:4px 8px; font-size:.72em; cursor:pointer; border-radius:4px; }
+  .rez-on:hover { background:#c8e6c9; }
+  .rez-off { background:#f5f5f5; border:1px solid #ccc; color:#999; padding:4px 8px; font-size:.72em; cursor:pointer; border-radius:4px; }
+  .rez-off:hover { background:#e0e0e0; color:#666; }
   .archived-row td { color:#888; }
 </style>
 </head>
@@ -328,6 +332,26 @@ async function deletePermanent(name, dirName) {
     if (data.ok) {
       result.innerHTML = '<div class="ok">✅ ' + data.msg + '</div>';
       setTimeout(() => { window.location.reload(); }, 1500);
+    } else {
+      result.innerHTML = '<div class="err">❌ ' + data.error + '</div>';
+    }
+  } catch(err) {
+    result.innerHTML = '<div class="err">❌ 提交失败: ' + err.message + '</div>';
+  }
+}
+async function toggleResurrection(name) {
+  const result = document.getElementById('result');
+  result.innerHTML = '';
+  try {
+    const resp = await fetch('/config/agents/resurrection-toggle', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      result.innerHTML = '<div class="ok">✅ ' + data.msg + '</div>';
+      setTimeout(() => { window.location.reload(); }, 1000);
     } else {
       result.innerHTML = '<div class="err">❌ ' + data.error + '</div>';
     }
@@ -550,7 +574,7 @@ def _find_archived_agents(squad_cfg: dict) -> list[dict]:
 
 # ── Render ─────────────────────────────────────────────────
 
-def _render_running_table(squad_cfg: dict, running: dict[str, bool]) -> str:
+def _render_running_table(squad_cfg: dict, running: dict[str, bool], whitelist: set) -> str:
     """Render HTML table of running agent peers with status icons."""
     peers = squad_cfg.get("peers", {})
     if not peers:
@@ -564,13 +588,22 @@ def _render_running_table(squad_cfg: dict, running: dict[str, bool]) -> str:
         is_up = running.get(name, False)
         status_icon = "🟢" if is_up else "⚪"
         tag = '<span class="tag tag-cmd">Commander</span>' if is_cmd else '<span class="tag tag-work">Worker</span>'
+
+        # Resurrection toggle
+        if is_cmd:
+            rez = "🔒"
+        elif name in whitelist:
+            rez = f'<button class="rez-on" onclick="toggleResurrection(\'{name}\')" title="复活已启用 — 点击关闭">♻️ ON</button>'
+        else:
+            rez = f'<button class="rez-off" onclick="toggleResurrection(\'{name}\')" title="复活已关闭 — 点击开启">💀 OFF</button>'
+
         if is_cmd:
             action = ""
         else:
             action = f'<button class="del-btn" onclick="removeAgent(\'{name}\')">删除</button>'
-        rows.append(f"<tr><td>{status_icon} {name} {tag}</td><td>{gw}/{ws}</td><td>{action}</td></tr>")
+        rows.append(f"<tr><td>{status_icon} {name} {tag}</td><td>{gw}/{ws}</td><td>{rez}</td><td>{action}</td></tr>")
 
-    return ("<table><tr><th>Agent</th><th>端口 (gw/ws)</th><th>操作</th></tr>"
+    return ("<table><tr><th>Agent</th><th>端口 (gw/ws)</th><th>复活</th><th>操作</th></tr>"
             + "\n".join(rows) + "</table>")
 
 
@@ -620,8 +653,11 @@ def create_agent_routes(app, gatekeeper):
 
         running = _detect_running_agents(squad_cfg)
         archived = _find_archived_agents(squad_cfg)
+        whitelist = set(squad_cfg.get("resurrection_whitelist", ["neo"]))
+        if not isinstance(whitelist, set):
+            whitelist = set(whitelist) if hasattr(whitelist, '__iter__') else {"neo"}
 
-        running_table = _render_running_table(squad_cfg, running)
+        running_table = _render_running_table(squad_cfg, running, whitelist)
         archived_table = _render_archived_table(archived)
         provider_opts, presets_js = _build_provider_js_data()
 
@@ -953,9 +989,52 @@ def create_agent_routes(app, gatekeeper):
             "msg": f"Agent '{name}' 已永久删除。",
         })
 
+    async def _toggle_resurrection(request: Request):
+        """POST /config/agents/resurrection-toggle — toggle resurrection whitelist."""
+        _user = request.session.get("user")
+        if not _user:
+            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "无效的请求格式"}, status_code=400)
+
+        name = (body.get("name", "") or "").strip()
+        if not name:
+            return JSONResponse({"ok": False, "error": "缺少 name"}, status_code=400)
+        if name == "neo":
+            return JSONResponse({"ok": False, "error": "Commander (neo) 始终在复活白名单中，不可切换"}, status_code=403)
+
+        squad_cfg = load_config(force_reload=True)
+        whitelist = list(squad_cfg.get("resurrection_whitelist", ["neo"]))
+        if not isinstance(whitelist, list):
+            whitelist = list(whitelist) if hasattr(whitelist, '__iter__') else ["neo"]
+
+        if name in whitelist:
+            whitelist.remove(name)
+            action = "已关闭"
+        else:
+            whitelist.append(name)
+            action = "已开启"
+
+        squad_cfg["resurrection_whitelist"] = whitelist
+        config_path_sc = _get_config_path()
+        try:
+            with open(config_path_sc, "w") as f:
+                json.dump(squad_cfg, f, indent=2, ensure_ascii=False)
+        except OSError as e:
+            return JSONResponse({"ok": False, "error": f"更新 squad_config 失败: {e}"}, status_code=500)
+
+        return JSONResponse({
+            "ok": True,
+            "msg": f"Agent '{name}' 复活白名单 {action}。重启空间后生效。",
+        })
+
     # Mount routes
     app.get("/config/agents")(_agent_page)
     app.post("/config/agents/add")(_add_agent)
     app.post("/config/agents/remove")(_remove_agent)
     app.post("/config/agents/restore")(_restore_agent)
     app.post("/config/agents/delete-permanent")(_delete_permanent_agent)
+    app.post("/config/agents/resurrection-toggle")(_toggle_resurrection)
