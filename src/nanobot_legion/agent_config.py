@@ -721,7 +721,7 @@ def create_agent_routes(app, gatekeeper):
             from starlette.responses import RedirectResponse
             return RedirectResponse("/")
 
-        squad_cfg = load_config(force_reload=True)
+        squad_cfg = load_config()
         neo_cfg = _get_neo_config(squad_cfg)
         neo_provider_id, neo_api_key, _ = _get_neo_provider_info(neo_cfg)
 
@@ -1279,7 +1279,7 @@ def create_agent_routes(app, gatekeeper):
         if not name or name in ("add", "remove", "restore", "delete-permanent", "start", "stop"):
             return HTMLResponse("<h3>Agent 不存在</h3>", status_code=404)
 
-        squad_cfg = load_config(force_reload=True)
+        squad_cfg = load_config()
         peers = squad_cfg.get("peers", {})
         if name not in peers:
             return HTMLResponse(f"<h3>Agent '{name}' 不在编制中</h3>", status_code=404)
