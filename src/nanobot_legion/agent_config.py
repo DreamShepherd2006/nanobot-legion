@@ -857,6 +857,7 @@ def create_agent_routes(app, gatekeeper):
         peers[name] = {"id": f"squad:{name}", "gateway_port": gw, "ws_port": ws}
         squad_cfg["peers"] = peers
 
+        # Sync roster first (gatekeeper reads from disk, so save first)
         try:
             save_config(squad_cfg)
         except OSError as e:
@@ -865,8 +866,13 @@ def create_agent_routes(app, gatekeeper):
                 status_code=201
             )
 
-        _sync_roster(gatekeeper, squad_cfg)
-        result["msg"] += " WebUI 侧边栏已同步。"
+        try:
+            _sync_roster(gatekeeper, squad_cfg)
+        except Exception as e:
+            return JSONResponse(
+                {"ok": True, "msg": f"Agent '{name}' 已保存但侧边栏同步失败: {e}，重启空间后生效"},
+                status_code=201
+            )
 
         return JSONResponse(
             {"ok": True, "msg": f"Agent '{name}' 已添加 (网关: {gw}, WS: {ws}, provider: {provider_id})，重启空间后生效"},
