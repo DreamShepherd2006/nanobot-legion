@@ -55,6 +55,7 @@ from cloud_agent_gateway.package_source import get_package_source, build_source_
 from .squad_config_loader import get_relay_timeout, get_resurrection_whitelist, load_config  # noqa: E402
 from cloud_agent_gateway.platforms import platform  # noqa: E402
 from .agent_config import create_agent_routes  # noqa: E402
+from .squad_admin import create_squad_admin_routes  # noqa: E402
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -217,9 +218,25 @@ Legion 多智能体编制管理。Commander (neo) 由初始化配置生成。
 
 添加或管理 Worker Agent（名字、角色、模型），保存后**重启空间**生效。
 
----
+ ---
 
-# 📁 文件管理
+ # 🛡️ Commander 白名单
+
+ 控制哪些用户可通过 relay 跨空间调度 agent：
+
+ 👉 [`配置白名单`](/config/commander)
+
+ ---
+
+ # 🔗 用户-Agent 映射
+
+ 将特定 OAuth 用户绑定到专属 agent（频道绑定写入该 agent 目录）：
+
+ 👉 [`配置映射`](/config/user-agent-map)
+
+ ---
+
+ # 📁 文件管理
 
 上传、下载、管理你的文件（PPTX、视频、文档等）：
 
@@ -1495,6 +1512,7 @@ def create_app() -> FastAPI:
 
     # ── Agent management routes ───────────────────────────────
     create_agent_routes(_app, gk)
+    create_squad_admin_routes(_app, gk)
 
     # ── File manager routes ────────────────────────────────────
     _app.add_api_route("/files", file_manager.list_page, methods=["GET"], response_model=None)
