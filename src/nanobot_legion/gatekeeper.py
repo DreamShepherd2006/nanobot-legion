@@ -734,7 +734,10 @@ Agent 生成的输出文件存放在此，可随时下载。
         candidates = [
             Path(self._platform.data_root, "oauth.json"),
             Path(self._platform.data_root, "instances", "oauth.json"),
+            # 上层 data_root 中的 oauth.json（legion/ 隔离后 oauth 仍在根目录）
+            Path(self._platform.data_root).parent / "oauth.json",
             Path("/data", "instances", "oauth.json"),
+            Path("/data", "oauth.json"),
             Path("/mnt/workspace", "oauth.json"),
         ]
         for p in candidates:

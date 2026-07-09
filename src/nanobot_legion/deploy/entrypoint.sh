@@ -53,7 +53,7 @@ fi
 
 # ── 1. Route to squad if user chose Legion at setup ────────────────
 #     setup writes squad_config.json to persistent volume only for Legion mode.
-if [ -f "${DATA_ROOT}/squad_config.json" ] && [ -x /app/deploy/huggingface/launch.sh ]; then
+if [ -f "${DATA_ROOT}/legion/squad_config.json" ] && [ -x /app/deploy/huggingface/launch.sh ]; then
     echo "🦁 Squad Legion mode (squad_config.json found) — delegating to launch.sh"
     exec /app/deploy/huggingface/launch.sh
 fi

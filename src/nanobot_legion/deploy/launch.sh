@@ -30,6 +30,27 @@ else
 fi
 echo "📂 [Storage] data_root = $MOUNT_PATH"
 
+# ── 0b. Legion 工作区隔离 ────────────────────────────────────────
+# 多 agent 实例放在 DATA_ROOT/legion/ 子目录下，
+# 与单 agent 的 DATA_ROOT/instances/default/ 完全隔离。
+LEGACY_DATA_ROOT="$MOUNT_PATH"
+MOUNT_PATH="$MOUNT_PATH/legion"
+[ ! -d "$MOUNT_PATH" ] && mkdir -p "$MOUNT_PATH"
+echo "📂 [Legion]  data_root = $MOUNT_PATH"
+
+# 迁移旧路径（首次升级）
+if [ -f "$LEGACY_DATA_ROOT/squad_config.json" ] && [ ! -f "$MOUNT_PATH/squad_config.json" ]; then
+    echo "🔄 [Migrate] 检测到旧 squad_config.json，迁移到 legion/ ..."
+    cp "$LEGACY_DATA_ROOT/squad_config.json" "$MOUNT_PATH/squad_config.json"
+    if [ -d "$LEGACY_DATA_ROOT/instances" ] && [ ! -d "$MOUNT_PATH/instances" ]; then
+        cp -r "$LEGACY_DATA_ROOT/instances" "$MOUNT_PATH/instances"
+    fi
+    echo "✅ [Migrate] 迁移完成"
+fi
+
+# 导出 DATA_ROOT 供 squad_config_loader 等 Python 模块读取
+export DATA_ROOT="$MOUNT_PATH"
+
 # ── 1. 基础环境配置 ──────────────────────────────────────────────
 export HOME="/home/nanobot"
 DIR="$HOME/.nanobot"

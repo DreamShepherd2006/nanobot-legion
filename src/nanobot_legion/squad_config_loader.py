@@ -3,7 +3,7 @@
 Squad Config Loader — 统一配置入口。
 
 优先级：SQUAD_CONFIG_PATH env → {data_root}/squad_config.json → /app/squad_config.json (seed)
-配置应持久化在 data_root 下（如 /data/squad_config.json），seed 仅用于首次部署模板。
+Legion 模式下 data_root = {platform}/legion，与单 agent 的 instances/ 完全隔离。
 """
 import json, os
 
