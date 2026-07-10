@@ -339,7 +339,8 @@ Agent 生成的输出文件存放在此，可随时下载。
 
         cfg = load_config()
         peers = cfg.get("peers", {})
-        for name, info in peers.items():
+        print(f"[DIAG-RR] load_config returned: peers={list(cfg.get('peers',{}).keys())} id={id(cfg)}", file=sys.stderr, flush=True)
+    for name, info in peers.items():
             if isinstance(info, dict) and "gateway_port" in info:
                 self.agent_names.append(name)
                 self.squad_roster[name] = {

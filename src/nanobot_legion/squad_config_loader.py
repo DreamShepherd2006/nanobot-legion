@@ -5,7 +5,7 @@ Squad Config Loader — 统一配置入口。
 优先级：SQUAD_CONFIG_PATH env → {data_root}/squad_config.json → /app/squad_config.json (seed)
 Legion 模式下 data_root = {platform}/legion，与单 agent 的 instances/ 完全隔离。
 """
-import json, os
+import json, os, sys
 
 _SEED_PATH = "/app/squad_config.json"
 _config_cache: dict | None = None
@@ -61,6 +61,7 @@ def load_config(force_reload: bool = False) -> dict:
     """加载 squad_config.json → 返回完整配置 dict。缓存结果。"""
     global _config_cache
     if _config_cache is not None and not force_reload:
+        print(f"[DIAG-LC] cache HIT: peers={list(_config_cache.get('peers',{}).keys())} id={id(_config_cache)}", file=sys.stderr, flush=True)
         return _config_cache
 
     config = dict(_DEFAULTS)
@@ -79,6 +80,7 @@ def load_config(force_reload: bool = False) -> dict:
 
     # 2. env fallback（仅当文件中未定义时）
     _env_override(config)
+    print(f"[DIAG-LC] FILE load path={config_path}: peers={list(config.get('peers',{}).keys())}", file=sys.stderr, flush=True)
 
     _config_cache = config
     return config

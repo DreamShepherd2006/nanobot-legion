@@ -6,11 +6,11 @@ Provider 列表来自 nanobot 官方 ``providers/registry.py``，自动跟随上
 """
 from __future__ import annotations
 
-import datetime, json, os, shutil, signal, subprocess, time
+import datetime, json, os, shutil, signal, subprocess, sys, time
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
-from .squad_config_loader import load_config, save_config
+from .squad_config_loader import load_config, save_config, _get_config_path
 
 # ── provider registry (from official nanobot) ───────────────────────
 try:
@@ -873,10 +873,12 @@ def create_agent_routes(app, gatekeeper):
         # Update squad_config.json (persistent copy)
         peers[name] = {"id": f"squad:{name}", "gateway_port": gw, "ws_port": ws}
         squad_cfg["peers"] = peers
+        print(f"[DIAG-ADD] after add: squad_cfg peers={list(squad_cfg.get('peers',{}).keys())} id={id(squad_cfg)}", file=sys.stderr, flush=True)
 
         # Sync roster first (gatekeeper reads from disk, so save first)
         try:
             save_config(squad_cfg)
+            print(f"[DIAG-ADD] save_config done, path={_get_config_path()}", file=sys.stderr, flush=True)
         except OSError as e:
             return JSONResponse(
                 {"ok": True, "msg": f"Agent '{name}' 配置已创建 (端口 {gw}/{ws})，但 squad_config 更新失败: {e}。请手动添加 peer 或重启后用 /reset-setup 重建。"},
@@ -925,10 +927,12 @@ def create_agent_routes(app, gatekeeper):
         # Remove from peers
         del peers[name]
         squad_cfg["peers"] = peers
+        print(f"[DIAG-RM] after del: squad_cfg peers={list(squad_cfg.get('peers',{}).keys())} id={id(squad_cfg)}", file=sys.stderr, flush=True)
 
         # Persist squad_config.json
         try:
             save_config(squad_cfg)
+            print(f"[DIAG-RM] save_config done, path={_get_config_path()}", file=sys.stderr, flush=True)
         except OSError as e:
             return JSONResponse(
                 {"ok": False, "error": f"squad_config 更新失败: {e}"},
@@ -1083,10 +1087,12 @@ def create_agent_routes(app, gatekeeper):
             whitelist.append(name)
         squad_cfg["resurrection_whitelist"] = whitelist
         squad_cfg["peers"] = peers
+        print(f"[DIAG-RA] after save: squad_cfg peers={list(squad_cfg.get('peers',{}).keys())} id={id(squad_cfg)}", file=sys.stderr, flush=True)
 
         # Persist
         try:
             save_config(squad_cfg)
+            print(f"[DIAG-RA] save_config done, path={_get_config_path()}", file=sys.stderr, flush=True)
         except OSError as e:
             return JSONResponse(
                 {"ok": True, "msg": f"Agent '{name}' 目录已恢复（端口 {peers[name]['gateway_port']}/{peers[name]['ws_port']}），但 squad_config 更新失败: {e}。"},
