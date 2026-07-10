@@ -739,7 +739,7 @@ def create_agent_routes(app, gatekeeper):
             from starlette.responses import RedirectResponse
             return RedirectResponse("/")
 
-        squad_cfg = load_config()
+        squad_cfg = getattr(gatekeeper, "squad_config", None) or load_config()
         neo_cfg = _get_neo_config(squad_cfg)
         neo_provider_id, neo_api_key, _ = _get_neo_provider_info(neo_cfg)
 

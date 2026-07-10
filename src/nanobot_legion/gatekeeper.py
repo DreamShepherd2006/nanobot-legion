@@ -338,6 +338,7 @@ Agent 生成的输出文件存放在此，可随时下载。
         self.peer_env_map.clear()
 
         cfg = load_config()
+        self.squad_config = cfg  # cache for _agent_page (bypasses load_config staleness)
         peers = cfg.get("peers", {})
         print(f"[DIAG-RR] load_config returned: peers={list(cfg.get('peers',{}).keys())} id={id(cfg)}", file=sys.stderr, flush=True)
         for name, info in peers.items():
