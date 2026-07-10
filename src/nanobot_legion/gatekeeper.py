@@ -1533,11 +1533,11 @@ def create_app() -> FastAPI:
         cache_id = None
         try:
             m = _sys.modules.get('nanobot_legion.squad_config_loader')
-            if m and hasattr(m, '_config_cache'):
-                cache_id = id(m._config_cache)
+            if m and hasattr(m, 'squad_config_cache'):
+                cache_id = id(m.squad_config_cache)
         except Exception:
             pass
-        return JSONResponse({"modules": keys, "_config_cache_id": cache_id})
+        return JSONResponse({"modules": keys, "squad_config_cache_id": cache_id})
     _app.get("/diag/modules")(_diag_modules)
     _app.post("/api/squad/relay")(gk._handle_relay)
     _app.post("/api/squad/tasks")(gk._handle_tasks_post)
