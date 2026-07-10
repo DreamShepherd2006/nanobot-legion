@@ -879,7 +879,8 @@ def create_agent_routes(app, gatekeeper):
         # Sync roster first (gatekeeper reads from disk, so save first)
         try:
             save_config(squad_cfg)
-            print(f"[DIAG-ADD] save_config done, path={_get_config_path()}", file=sys.stderr, flush=True)
+            _scl.squad_config_cache = squad_cfg
+            print(f"[DIAG-ADD] save_config done, cache updated id={id(squad_cfg)}", file=sys.stderr, flush=True)
         except OSError as e:
             return JSONResponse(
                 {"ok": True, "msg": f"Agent '{name}' 配置已创建 (端口 {gw}/{ws})，但 squad_config 更新失败: {e}。请手动添加 peer 或重启后用 /reset-setup 重建。"},
@@ -982,7 +983,8 @@ def create_agent_routes(app, gatekeeper):
         # Persist squad_config.json
         try:
             save_config(squad_cfg)
-            print(f"[DIAG-RM] save_config done, path={_get_config_path()}", file=sys.stderr, flush=True)
+            _scl.squad_config_cache = squad_cfg
+            print(f"[DIAG-RM] save_config done, cache updated id={id(squad_cfg)}", file=sys.stderr, flush=True)
         except OSError as e:
             return JSONResponse(
                 {"ok": False, "error": f"squad_config 更新失败: {e}"},
@@ -1095,7 +1097,8 @@ def create_agent_routes(app, gatekeeper):
         # Persist
         try:
             save_config(squad_cfg)
-            print(f"[DIAG-RA] save_config done, path={_get_config_path()}", file=sys.stderr, flush=True)
+            _scl.squad_config_cache = squad_cfg
+            print(f"[DIAG-RA] save_config done, cache updated id={id(squad_cfg)}", file=sys.stderr, flush=True)
         except OSError as e:
             return JSONResponse(
                 {"ok": True, "msg": f"Agent '{name}' 目录已恢复（端口 {peers[name]['gateway_port']}/{peers[name]['ws_port']}），但 squad_config 更新失败: {e}。"},
@@ -1147,6 +1150,7 @@ def create_agent_routes(app, gatekeeper):
             squad_cfg["resurrection_whitelist"] = whitelist
             try:
                 save_config(squad_cfg)
+                _scl.squad_config_cache = squad_cfg
             except OSError:
                 pass
 
@@ -1249,6 +1253,7 @@ def create_agent_routes(app, gatekeeper):
 
         try:
             save_config(squad_cfg)
+            _scl.squad_config_cache = squad_cfg
         except OSError:
             pass  # Non-fatal; agent is already running
 
@@ -1297,6 +1302,7 @@ def create_agent_routes(app, gatekeeper):
 
         try:
             save_config(squad_cfg)
+            _scl.squad_config_cache = squad_cfg
         except OSError:
             pass
 
