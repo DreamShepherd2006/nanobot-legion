@@ -1004,7 +1004,13 @@ def create_agent_routes(app, gatekeeper):
             return JSONResponse({"ok": False, "error": f"归档目录 '{dir_name}' 不存在"}, status_code=404)
 
         if os.path.exists(dst_dir):
-            return JSONResponse({"ok": False, "error": f"Agent '{name}' 目录已存在（可能已恢复或正在运行）"}, status_code=409)
+            # Empty shell (no config.json) — some startup process may recreate
+            # bare directories.  Clean it up and proceed rather than refusing.
+            cfg_path = os.path.join(dst_dir, "config.json")
+            if os.path.isdir(dst_dir) and not os.path.isfile(cfg_path):
+                shutil.rmtree(dst_dir)
+            else:
+                return JSONResponse({"ok": False, "error": f"Agent '{name}' 目录已存在（可能已恢复或正在运行）"}, status_code=409)
 
         peers = squad_cfg.get("peers", {})
         if name in peers:
