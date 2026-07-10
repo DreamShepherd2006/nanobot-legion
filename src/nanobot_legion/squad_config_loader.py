@@ -32,6 +32,11 @@ def _get_config_path() -> str:
             pass
     # 也允许 env 覆盖 data_root
     data_root = os.environ.get("DATA_ROOT", data_root)
+    # legion isolation: persistent file moved to {data_root}/legion/
+    legion_path = os.path.join(data_root, "legion", "squad_config.json")
+    if os.path.exists(legion_path):
+        return legion_path
+    # fallback: pre-isolation root-level path
     persistent_path = os.path.join(data_root, "squad_config.json")
     if os.path.exists(persistent_path):
         return persistent_path
