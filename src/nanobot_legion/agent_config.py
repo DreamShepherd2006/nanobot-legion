@@ -512,6 +512,23 @@ def _allocate_ports(peers: dict) -> tuple[int, int]:
     raise RuntimeError("No available ports found")
 
 
+def _patch_agent_config_port(instance_dir: str, gw: int, ws: int) -> None:
+    """Update gateway.port and channels.websocket.port in agent's config.json."""
+    config_path = os.path.join(instance_dir, "config.json")
+    if not os.path.exists(config_path):
+        return
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+        cfg.setdefault("gateway", {})["port"] = gw
+        cfg.setdefault("channels", {}).setdefault("websocket", {})["port"] = ws
+        with open(config_path, "w") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        print(f"[agent_config] 🔧 {os.path.basename(instance_dir)} config.json 端口已更新 → gw={gw} ws={ws}", flush=True)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"[agent_config] ⚠️ 无法更新 {os.path.basename(instance_dir)} config.json 端口: {e}", flush=True)
+
+
 # ── Agent Detection ────────────────────────────────────────
 
 def _detect_running_agents(squad_cfg: dict) -> dict[str, bool]:
@@ -1038,9 +1055,22 @@ def create_agent_routes(app, gatekeeper):
         except OSError as e:
             return JSONResponse({"ok": False, "error": f"恢复目录失败: {e}"}, status_code=500)
 
-        # Add back to peers
+        # Add back to peers — check archived ports for conflicts
         if isinstance(gw, (int, float)) and gw > 0 and isinstance(ws, (int, float)) and ws > 0:
-            peers[name] = {"id": f"squad:{name}", "gateway_port": int(gw), "ws_port": int(ws)}
+            gw_int, ws_int = int(gw), int(ws)
+            # Collect all ports currently claimed by peers + actually listening
+            used_ports = set()
+            for info in peers.values():
+                for k in ("gateway_port", "ws_port"):
+                    v = info.get(k, 0)
+                    if isinstance(v, (int, float)) and v > 0:
+                        used_ports.add(int(v))
+            used_ports |= _get_listening_ports()
+            if gw_int in used_ports or ws_int in used_ports:
+                gw_int, ws_int = _allocate_ports(peers)
+                # Also update the agent's own config.json with re-allocated ports
+                _patch_agent_config_port(dst_dir, gw_int, ws_int)
+            peers[name] = {"id": f"squad:{name}", "gateway_port": gw_int, "ws_port": ws_int}
         else:
             gw, ws = _allocate_ports(peers)
             peers[name] = {"id": f"squad:{name}", "gateway_port": gw, "ws_port": ws}
