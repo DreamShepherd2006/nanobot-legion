@@ -929,16 +929,6 @@ def create_agent_routes(app, gatekeeper):
         squad_cfg["peers"] = peers
         print(f"[DIAG-RM] after del: squad_cfg peers={list(squad_cfg.get('peers',{}).keys())} id={id(squad_cfg)}", file=sys.stderr, flush=True)
 
-        # Persist squad_config.json
-        try:
-            save_config(squad_cfg)
-            print(f"[DIAG-RM] save_config done, path={_get_config_path()}", file=sys.stderr, flush=True)
-        except OSError as e:
-            return JSONResponse(
-                {"ok": False, "error": f"squad_config 更新失败: {e}"},
-                status_code=500,
-            )
-
         # Archive agent directory — kill process first to release file handles
         data_root = squad_cfg.get("data_root", "/data")
         agent_dir = os.path.join(data_root, "instances", name)
@@ -986,6 +976,16 @@ def create_agent_routes(app, gatekeeper):
                 print(f"[agent_config] 📦 Agent '{name}' 已归档 → {archived_dir}", flush=True)
         else:
             print(f"[agent_config] ⚠️  Agent '{name}' 目录不存在: {agent_dir}", flush=True)
+
+        # Persist squad_config.json
+        try:
+            save_config(squad_cfg)
+            print(f"[DIAG-RM] save_config done, path={_get_config_path()}", file=sys.stderr, flush=True)
+        except OSError as e:
+            return JSONResponse(
+                {"ok": False, "error": f"squad_config 更新失败: {e}"},
+                status_code=500,
+            )
 
         _sync_roster(gatekeeper, squad_cfg)
 
