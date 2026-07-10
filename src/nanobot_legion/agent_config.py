@@ -10,6 +10,7 @@ import copy, datetime, json, os, shutil, signal, subprocess, sys, time
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
+from . import squad_config_loader as _scl
 from .squad_config_loader import load_config, save_config, _get_config_path
 
 # ── provider registry (from official nanobot) ───────────────────────
