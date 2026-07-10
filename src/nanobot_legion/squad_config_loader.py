@@ -3,7 +3,7 @@
 Squad Config Loader — 统一配置入口。
 
 优先级：SQUAD_CONFIG_PATH env → {data_root}/squad_config.json → /app/squad_config.json (seed)
-配置应持久化在 data_root 下（如 /data/squad_config.json），seed 仅用于首次部署模板。
+Legion 模式下 data_root = {platform}/legion，与单 agent 的 instances/ 完全隔离。
 """
 import json, os
 
@@ -32,6 +32,11 @@ def _get_config_path() -> str:
             pass
     # 也允许 env 覆盖 data_root
     data_root = os.environ.get("DATA_ROOT", data_root)
+    # legion isolation: persistent file moved to {data_root}/legion/
+    legion_path = os.path.join(data_root, "legion", "squad_config.json")
+    if os.path.exists(legion_path):
+        return legion_path
+    # fallback: pre-isolation root-level path
     persistent_path = os.path.join(data_root, "squad_config.json")
     if os.path.exists(persistent_path):
         return persistent_path
@@ -129,6 +134,23 @@ def _env_override(config: dict):
                 pass
 
 
+def save_config(config: dict | None = None) -> None:
+    """原子写入 squad_config.json。先写临时文件，再 os.replace（POSIX 原子 rename）。
+
+    不传 config 时默认写当前 _config_cache。
+    """
+    global _config_cache
+    if config is None:
+        config = _config_cache
+    if config is None:
+        config = load_config()
+    path = _get_config_path()
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
 # ── 便捷存取 ────────────────────────────────────────────
 
 def get_peers() -> dict:
@@ -150,6 +172,12 @@ def get_user_agent_map() -> dict:
 
 def get_relay_timeout() -> int:
     return load_config().get("relay_timeout", 60)
+
+
+def get_resurrection_whitelist() -> set:
+    """Return the set of agent names that are allowed auto-resurrection."""
+    whitelist = load_config().get("resurrection_whitelist", ["neo"])
+    return set(whitelist) if isinstance(whitelist, list) else {"neo"}
 
 
 def get_deploy_platform() -> str:

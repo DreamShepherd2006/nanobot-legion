@@ -52,9 +52,10 @@ from cloud_agent_gateway.package_source import get_package_source, build_source_
 # IMPORTANT: squad_config_loader must be imported BEFORE platforms!
 # It injects DEPLOY_PLATFORM into os.environ at module level, which
 # platforms.__init__._detect() reads in its matches() step 0.
-from .squad_config_loader import get_relay_timeout  # noqa: E402
+from .squad_config_loader import get_relay_timeout, get_resurrection_whitelist, load_config  # noqa: E402
 from cloud_agent_gateway.platforms import platform  # noqa: E402
 from .agent_config import create_agent_routes  # noqa: E402
+from .squad_admin import create_squad_admin_routes  # noqa: E402
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -69,7 +70,6 @@ class Gatekeeper:
     """
 
     # ── Class constants (resurrection thresholds) ─────────────
-    RESURRECT_WHITELIST: set = {"neo"}
     RESURRECT_THRESHOLD: int = 60       # seconds offline before trigger
     RESURRECT_COOLDOWN: int = 300       # seconds before retry
     GRACE_SECONDS: int = 150            # startup grace period
@@ -135,6 +135,7 @@ class Gatekeeper:
         # ── Tokens ────────────────────────────────────────────
         self._relay_token = os.environ.get("SQUAD_RELAY_TOKEN", "").strip()
         self._relay_timeout = get_relay_timeout()
+        self._resurrection_whitelist = get_resurrection_whitelist()
 
         # ── DLQ dir ───────────────────────────────────────────
         self._dlq_dir = os.environ.get("DLQ_DIR",
@@ -217,9 +218,25 @@ Legion 多智能体编制管理。Commander (neo) 由初始化配置生成。
 
 添加或管理 Worker Agent（名字、角色、模型），保存后**重启空间**生效。
 
----
+ ---
 
-# 📁 文件管理
+ # 🛡️ Commander 白名单
+
+ 控制哪些用户可通过 relay 跨空间调度 agent：
+
+ 👉 [`配置白名单`](/config/commander)
+
+ ---
+
+ # 🔗 用户-Agent 映射
+
+ 将特定 OAuth 用户绑定到专属 agent（频道绑定写入该 agent 目录）：
+
+ 👉 [`配置映射`](/config/user-agent-map)
+
+ ---
+
+ # 📁 文件管理
 
 上传、下载、管理你的文件（PPTX、视频、文档等）：
 
@@ -311,31 +328,25 @@ Agent 生成的输出文件存放在此，可随时下载。
         self._log(f"📌 pinned binding chat ({_cid[:12]}...) — {len(_bindings)} channels")
 
     # ═══════════════════════════════════════════════════════════
-    # [Section 2] Roster parsing — NANOBOT_PEER_* → squad_roster
+    # [Section 2] Roster — squad_config.json peers as source of truth
     # ═══════════════════════════════════════════════════════════
 
     def _refresh_roster(self):
-        """Parse NANOBOT_PEER_* env vars to build agent roster."""
+        """Read squad_config.json peers to build agent roster."""
         self.agent_names.clear()
         self.squad_roster.clear()
         self.peer_env_map.clear()
 
-        for key, val in os.environ.items():
-            if not key.startswith("NANOBOT_PEER_"):
-                continue
-            self.peer_env_map[key] = val
-            agent_name = key[len("NANOBOT_PEER_"):].lower()
-            try:
-                info = json.loads(val)
-                if isinstance(info, dict) and "id" in info:
-                    self.agent_names.append(agent_name)
-                    self.squad_roster[agent_name] = {
-                        "id": info["id"],
-                        "gateway_port": info.get("gateway_port", 0),
-                        "ws_port": info.get("ws_port", 0),
-                    }
-            except (json.JSONDecodeError, TypeError):
-                self._log(f"⚠️ 跳过无效 NANOBOT_PEER_*: {key}")
+        cfg = load_config()
+        peers = cfg.get("peers", {})
+        for name, info in peers.items():
+            if isinstance(info, dict) and "gateway_port" in info:
+                self.agent_names.append(name)
+                self.squad_roster[name] = {
+                    "id": info.get("id", f"squad:{name}"),
+                    "gateway_port": info.get("gateway_port", 0),
+                    "ws_port": info.get("ws_port", 0),
+                }
 
         self.agent_names.sort()
         self._log(f"📋 编制加载: {len(self.agent_names)} agents → {self.agent_names}")
@@ -620,7 +631,7 @@ Agent 生成的输出文件存放在此，可随时下载。
             return
 
         # Already offline — check if resurrection should trigger
-        if name not in self.RESURRECT_WHITELIST:
+        if name not in self._resurrection_whitelist:
             return
         if self._resurrecting.get(name):
             return
@@ -740,7 +751,10 @@ Agent 生成的输出文件存放在此，可随时下载。
         candidates = [
             Path(self._platform.data_root, "oauth.json"),
             Path(self._platform.data_root, "instances", "oauth.json"),
+            # 上层 data_root 中的 oauth.json（legion/ 隔离后 oauth 仍在根目录）
+            Path(self._platform.data_root).parent / "oauth.json",
             Path("/data", "instances", "oauth.json"),
+            Path("/data", "oauth.json"),
             Path("/mnt/workspace", "oauth.json"),
         ]
         for p in candidates:
@@ -1498,6 +1512,7 @@ def create_app() -> FastAPI:
 
     # ── Agent management routes ───────────────────────────────
     create_agent_routes(_app, gk)
+    create_squad_admin_routes(_app, gk)
 
     # ── File manager routes ────────────────────────────────────
     _app.add_api_route("/files", file_manager.list_page, methods=["GET"], response_model=None)

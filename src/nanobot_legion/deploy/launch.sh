@@ -30,6 +30,27 @@ else
 fi
 echo "📂 [Storage] data_root = $MOUNT_PATH"
 
+# ── 0b. Legion 工作区隔离 ────────────────────────────────────────
+# 多 agent 实例放在 DATA_ROOT/legion/ 子目录下，
+# 与单 agent 的 DATA_ROOT/instances/default/ 完全隔离。
+LEGACY_DATA_ROOT="$MOUNT_PATH"
+MOUNT_PATH="$MOUNT_PATH/legion"
+[ ! -d "$MOUNT_PATH" ] && mkdir -p "$MOUNT_PATH"
+echo "📂 [Legion]  data_root = $MOUNT_PATH"
+
+# 迁移旧路径（首次升级）
+if [ -f "$LEGACY_DATA_ROOT/squad_config.json" ] && [ ! -f "$MOUNT_PATH/squad_config.json" ]; then
+    echo "🔄 [Migrate] 检测到旧 squad_config.json，迁移到 legion/ ..."
+    cp "$LEGACY_DATA_ROOT/squad_config.json" "$MOUNT_PATH/squad_config.json"
+    if [ -d "$LEGACY_DATA_ROOT/instances" ] && [ ! -d "$MOUNT_PATH/instances" ]; then
+        cp -r "$LEGACY_DATA_ROOT/instances" "$MOUNT_PATH/instances"
+    fi
+    echo "✅ [Migrate] 迁移完成"
+fi
+
+# 导出 DATA_ROOT 供 squad_config_loader 等 Python 模块读取
+export DATA_ROOT="$MOUNT_PATH"
+
 # ── 1. 基础环境配置 ──────────────────────────────────────────────
 export HOME="/home/nanobot"
 DIR="$HOME/.nanobot"
@@ -60,11 +81,13 @@ export PYTHONDONTWRITEBYTECODE=1
 export WEBUI_AGENT="neo"
 
 # ── 2. 军团环境变量解冻（从 /proc/1/environ 兜底读取）───────────
+# 注意：NANOBOT_PEER_* 不再从面板环境变量导入。
+# Agent 编制唯一来源是 squad_config.json（step 3a）。
 echo "🧬 [System] 正在从系统根进程同步军团环境变量..."
 if [ -r /proc/1/environ ]; then
     while IFS='=' read -r -d '' name value; do
-        if [[ "$name" == NANOBOT_TOKEN ]] || [[ "$name" == NANOBOT_PEER_* ]] || \
-           [[ "$name" == SQUAD_LEGION ]] || [[ "$name" == SPACE_ID ]] || \
+        if [[ "$name" == NANOBOT_TOKEN ]] || \
+           [[ "$name" == SPACE_ID ]] || \
            [[ "$name" == SQUAD_RELAY_TOKEN_* ]]; then
             export "$name"="$value"
             echo "   >> 已解冻: $name"
@@ -72,12 +95,6 @@ if [ -r /proc/1/environ ]; then
     done < /proc/1/environ
 else
     echo "   ℹ️  /proc/1/environ 不可读（tini 隔离），依赖 su 继承环境"
-fi
-
-if [ -z "$NANOBOT_PEER_NEO" ]; then
-    echo "⚠️ [Warning] 未检测到 NANOBOT_PEER_NEO，请检查环境变量配置"
-else
-    echo "✅ [System] 环境变量同步完成，已进入内存"
 fi
 
 # ── 3. 平台环境初始化 ────────────────────────────────────────────
@@ -114,6 +131,13 @@ if count:
         echo "   ✅ 已从 squad_config.json 导出新 peer"
     fi
 fi
+
+# 验证：Neo 必须存在
+if [ -z "$NANOBOT_PEER_NEO" ]; then
+    echo "❌ [Fatal] 未检测到 NANOBOT_PEER_NEO — squad_config.json 必须包含 neo peer"
+    exit 1
+fi
+echo "✅ [System] Agent 编制已从 squad_config.json 加载"
 
 # ── 4. 构建军团花名册 SQUAD_LEGION ─────────────────────────────────
 echo "🧑‍🤝‍🧑 [Squad] 构建军团花名册 SQUAD_LEGION..."

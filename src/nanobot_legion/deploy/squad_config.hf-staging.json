@@ -17,5 +17,6 @@
     "sentinel": {"id": "squad:sentinel",   "gateway_port": 20021, "ws_port": 20022},
     "assistant":{"id": "squad:assistant",  "gateway_port": 20031, "ws_port": 20032},
     "medic":    {"id": "squad:medic",      "gateway_port": 20041, "ws_port": 20042}
-  }
+  },
+  "resurrection_whitelist": ["neo"]
 }
