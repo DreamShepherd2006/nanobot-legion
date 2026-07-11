@@ -217,8 +217,11 @@ def create_squad_admin_routes(app, gatekeeper):
     # ── Commander whitelist ──────────────────────────────────────────
 
     async def _commander_page(request: Request):
-        if not request.session.get("user"):
+        _su = request.session.get("user")
+        if not _su:
             return RedirectResponse("/")
+        if not gatekeeper._platform.is_commander(_su):
+            return HTMLResponse(_DENIED, status_code=403)
         cfg = load_config()
         whitelist = cfg.get("commander_whitelist", [])
         if whitelist:
@@ -232,8 +235,11 @@ def create_squad_admin_routes(app, gatekeeper):
         return HTMLResponse(_COMMANDER_HTML.replace("{list_html}", items))
 
     async def _commander_add(request: Request):
-        if not request.session.get("user"):
+        _su = request.session.get("user")
+        if not _su:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_su):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
         try:
             body = await request.json()
         except Exception:
@@ -252,8 +258,11 @@ def create_squad_admin_routes(app, gatekeeper):
         return JSONResponse({"ok": True})
 
     async def _commander_remove(request: Request):
-        if not request.session.get("user"):
+        _su = request.session.get("user")
+        if not _su:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_su):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
         try:
             body = await request.json()
         except Exception:
@@ -274,8 +283,11 @@ def create_squad_admin_routes(app, gatekeeper):
     # ── User-agent mapping ───────────────────────────────────────────
 
     async def _user_agent_map_page(request: Request):
-        if not request.session.get("user"):
+        _su = request.session.get("user")
+        if not _su:
             return RedirectResponse("/")
+        if not gatekeeper._platform.is_commander(_su):
+            return HTMLResponse(_DENIED, status_code=403)
         cfg = load_config()
         mapping = cfg.get("user_agent_map", {})
         webui_agent = cfg.get("webui_agent", "neo")
@@ -292,8 +304,11 @@ def create_squad_admin_routes(app, gatekeeper):
         return HTMLResponse(html)
 
     async def _user_agent_map_add(request: Request):
-        if not request.session.get("user"):
+        _su = request.session.get("user")
+        if not _su:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_su):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
         try:
             body = await request.json()
         except Exception:
@@ -317,8 +332,11 @@ def create_squad_admin_routes(app, gatekeeper):
         return JSONResponse({"ok": True})
 
     async def _user_agent_map_remove(request: Request):
-        if not request.session.get("user"):
+        _su = request.session.get("user")
+        if not _su:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_su):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
         try:
             body = await request.json()
         except Exception:
@@ -357,3 +375,5 @@ def _esc(s: str) -> str:
 def _esc_js(s: str) -> str:
     """Escape a string for embedding in JS single-quoted string (via HTML entity)."""
     return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+
+_DENIED = "<h3 style='text-align:center;margin-top:60px;color:#e74c3c;'>🔒 仅 Commander 可访问此管理页面</h3>"

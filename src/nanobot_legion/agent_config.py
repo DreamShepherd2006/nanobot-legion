@@ -737,6 +737,8 @@ def create_agent_routes(app, gatekeeper):
         if not _user:
             from starlette.responses import RedirectResponse
             return RedirectResponse("/")
+        if not gatekeeper._platform.is_commander(_user):
+            return HTMLResponse(_DENIED, status_code=403)
 
         squad_cfg = load_config()
         neo_cfg = _get_neo_config(squad_cfg)
@@ -763,6 +765,8 @@ def create_agent_routes(app, gatekeeper):
         _user = request.session.get("user")
         if not _user:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_user):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
 
         try:
             body = await request.json()
@@ -901,6 +905,8 @@ def create_agent_routes(app, gatekeeper):
         _user = request.session.get("user")
         if not _user:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_user):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
 
         try:
             body = await request.json()
@@ -995,6 +1001,8 @@ def create_agent_routes(app, gatekeeper):
         _user = request.session.get("user")
         if not _user:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_user):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
 
         try:
             body = await request.json()
@@ -1105,6 +1113,8 @@ def create_agent_routes(app, gatekeeper):
         _user = request.session.get("user")
         if not _user:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_user):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
 
         try:
             body = await request.json()
@@ -1156,6 +1166,8 @@ def create_agent_routes(app, gatekeeper):
         _user = request.session.get("user")
         if not _user:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_user):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
 
         try:
             body = await request.json()
@@ -1252,6 +1264,8 @@ def create_agent_routes(app, gatekeeper):
         _user = request.session.get("user")
         if not _user:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_user):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
 
         try:
             body = await request.json()
@@ -1304,6 +1318,8 @@ def create_agent_routes(app, gatekeeper):
         _user = request.session.get("user")
         if not _user:
             return HTMLResponse("<h3>请先登录</h3>", status_code=401)
+        if not gatekeeper._platform.is_commander(_user):
+            return HTMLResponse(_DENIED, status_code=403)
 
         name = request.path_params.get("name", "")
         if not name or name in ("add", "remove", "restore", "delete-permanent", "start", "stop"):
@@ -1458,6 +1474,8 @@ async function saveConfig(name) {{
         _user = request.session.get("user")
         if not _user:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_user):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
 
         name = request.path_params.get("name", "")
         if not name:
@@ -1526,3 +1544,5 @@ async function saveConfig(name) {{
     app.post("/config/agents/stop")(_stop_agent)
     app.get("/config/agents/{name}")(_agent_detail)
     app.post("/config/agents/{name}/save")(_save_agent_detail)
+
+_DENIED = "<h3 style='text-align:center;margin-top:60px;color:#e74c3c;'>🔒 仅 Commander 可访问此管理页面</h3>"
