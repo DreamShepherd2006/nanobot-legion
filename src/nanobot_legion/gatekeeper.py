@@ -1206,10 +1206,12 @@ Agent 生成的输出文件存放在此，可随时下载。
                         self._log("bootstrap ws_url → ws_path (Host header fix)")
                 except Exception as exc:
                     self._log(f"bootstrap ws_url fix skipped: {exc}")
+                resp_headers = {k: v for k, v in rp_resp.headers.items()
+                                 if k.lower() != "content-length"}
                 return Response(
                     content=body,
                     status_code=rp_resp.status_code,
-                    headers=dict(rp_resp.headers),
+                    headers=resp_headers,
                     media_type=rp_resp.headers.get("content-type", "application/json"))
 
             return StreamingResponse(
