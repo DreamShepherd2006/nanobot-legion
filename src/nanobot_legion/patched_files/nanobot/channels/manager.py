@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import os
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
@@ -24,12 +23,13 @@ if TYPE_CHECKING:
 
 def _default_webui_dist() -> Path | None:
     """Return the absolute path to the bundled webui dist directory if it exists."""
-    # cloud-agent-gateway / Legion: env var override (no symlink in site-packages)
+    import os
+
     override = os.environ.get("NANOBOT_WEBUI_DIST")
     if override:
-        p = Path(override)
-        if p.is_dir():
-            return p.resolve()
+        candidate = Path(override)
+        if candidate.is_dir():
+            return candidate
     try:
         import nanobot.web as web_pkg  # type: ignore[import-not-found]
     except ImportError:
