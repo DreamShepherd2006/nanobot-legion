@@ -125,24 +125,22 @@ _USER_AGENT_MAP_HTML = """\
   .card { background: #fff; border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem;
           box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
   table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #eee; }
+  th, td { text-align: left; padding: 0.6rem 0.75rem; border-bottom: 1px solid #eee; }
   th { font-size: 0.8rem; color: #666; text-transform: uppercase; }
   .tag { background: #e8f0fe; color: #1a73e8; border-radius: 4px; padding: 2px 8px;
          font-size: 0.85rem; font-family: monospace; }
-  .btn { border: none; border-radius: 6px; padding: 0.4rem 0.9rem; cursor: pointer;
+  .map-input { border: 1px solid #dadce0; border-radius: 6px; padding: 0.4rem 0.6rem;
+               font-size: 0.9rem; width: 100%; }
+  .map-input:focus { outline: none; border-color: #1a73e8; box-shadow: 0 0 0 2px rgba(26,115,232,0.15); }
+  .btn { border: none; border-radius: 6px; padding: 0.45rem 1rem; cursor: pointer;
          font-size: 0.85rem; transition: background 0.15s; }
-  .btn-danger { background: #fce8e6; color: #c5221f; }
-  .btn-danger:hover { background: #f8c9c5; }
-  .add-row { display: flex; gap: 0.5rem; margin-top: 1rem; }
-  .add-row input { flex: 1; border: 1px solid #dadce0; border-radius: 6px;
-                   padding: 0.45rem 0.6rem; font-size: 0.9rem; }
   .btn-primary { background: #1a73e8; color: #fff; }
   .btn-primary:hover { background: #1557b0; }
   .empty { color: #999; padding: 1rem 0; text-align: center; }
   .back { display: inline-block; margin-top: 1.5rem; color: #1a73e8; text-decoration: none;
           font-size: 0.9rem; }
   .back:hover { text-decoration: underline; }
-  .note { font-size: 0.8rem; color: #888; margin-top: 0.5rem; }
+  .note { font-size: 0.8rem; color: #888; margin-top: 0.75rem; }
   .toast { position: fixed; bottom: 1.5rem; right: 1.5rem; padding: 0.75rem 1.25rem;
            border-radius: 8px; color: #fff; font-size: 0.9rem; z-index: 999;
            opacity: 0; transition: opacity 0.3s; }
@@ -153,20 +151,18 @@ _USER_AGENT_MAP_HTML = """\
 </head>
 <body>
 <h1>🔗 用户-Agent 映射</h1>
-<p class="sub">将特定 OAuth 用户绑定到专属 agent（频道绑定写入该 agent 目录）。</p>
+<p class="sub">将 OAuth 用户绑定到对应的 Worker Agent。未映射的用户自动使用 {webui_agent}。</p>
 
 <div class="card">
 <table>
-<thead><tr><th>用户</th><th>Agent</th><th></th></tr></thead>
+<thead><tr><th>Agent</th><th>OAuth 用户名</th></tr></thead>
 <tbody id="rows">{rows_html}</tbody>
 </table>
-<p class="note">未映射的用户使用 WebUI agent（{webui_agent}）。</p>
+<p class="note">每个用户名绑定一个 Agent。留空即解除绑定。</p>
 </div>
 
-<div class="add-row">
-  <input id="new-user" placeholder="用户（如 GitHub 用户名）" autocomplete="off">
-  <input id="new-agent" placeholder="Agent 名称" autocomplete="off">
-  <button class="btn btn-primary" onclick="add()">➕ 添加</button>
+<div style="text-align:right; margin-bottom:1rem;">
+  <button class="btn btn-primary" onclick="save()">💾 保存</button>
 </div>
 
 <a class="back" href="javascript:history.back()">← 返回</a>
@@ -174,30 +170,22 @@ _USER_AGENT_MAP_HTML = """\
 <div id="toast" class="toast"></div>
 
 <script>
-async function add() {
-  const u = document.getElementById('new-user').value.trim();
-  const a = document.getElementById('new-agent').value.trim();
-  if (!u || !a) return;
-  const resp = await fetch(location.pathname + '/add', {
+async function save() {
+  const inputs = document.querySelectorAll('.map-input');
+  const mapping = {};
+  for (const inp of inputs) {
+    const agent = inp.dataset.agent;
+    const user = inp.value.trim();
+    if (user) mapping[user] = agent;
+  }
+  const resp = await fetch(location.pathname + '/save', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({user: u, agent: a})
+    body: JSON.stringify({mapping})
   });
   const data = await resp.json();
-  toast(data.ok ? `✅ 已添加 ${u} → ${a}` : `❌ ${data.error}`, data.ok);
-  if (data.ok) location.reload();
-}
-
-async function remove(user) {
-  if (!confirm(`移除 ${user} 的映射？`)) return;
-  const resp = await fetch(location.pathname + '/remove', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({user: user})
-  });
-  const data = await resp.json();
-  toast(data.ok ? `✅ 已移除 ${user}` : `❌ ${data.error}`, data.ok);
-  if (data.ok) location.reload();
+  toast(data.ok ? '✅ 已保存' : '❌ ' + data.error, data.ok);
+  if (data.ok) setTimeout(() => location.reload(), 800);
 }
 
 function toast(msg, ok) {
@@ -217,8 +205,11 @@ def create_squad_admin_routes(app, gatekeeper):
     # ── Commander whitelist ──────────────────────────────────────────
 
     async def _commander_page(request: Request):
-        if not request.session.get("user"):
+        _su = request.session.get("user")
+        if not _su:
             return RedirectResponse("/")
+        if not gatekeeper._platform.is_commander(_su):
+            return HTMLResponse(_DENIED, status_code=403)
         cfg = load_config()
         whitelist = cfg.get("commander_whitelist", [])
         if whitelist:
@@ -232,8 +223,11 @@ def create_squad_admin_routes(app, gatekeeper):
         return HTMLResponse(_COMMANDER_HTML.replace("{list_html}", items))
 
     async def _commander_add(request: Request):
-        if not request.session.get("user"):
+        _su = request.session.get("user")
+        if not _su:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_su):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
         try:
             body = await request.json()
         except Exception:
@@ -252,8 +246,11 @@ def create_squad_admin_routes(app, gatekeeper):
         return JSONResponse({"ok": True})
 
     async def _commander_remove(request: Request):
-        if not request.session.get("user"):
+        _su = request.session.get("user")
+        if not _su:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_su):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
         try:
             body = await request.json()
         except Exception:
@@ -274,67 +271,56 @@ def create_squad_admin_routes(app, gatekeeper):
     # ── User-agent mapping ───────────────────────────────────────────
 
     async def _user_agent_map_page(request: Request):
-        if not request.session.get("user"):
+        _su = request.session.get("user")
+        if not _su:
             return RedirectResponse("/")
+        if not gatekeeper._platform.is_commander(_su):
+            return HTMLResponse(_DENIED, status_code=403)
         cfg = load_config()
-        mapping = cfg.get("user_agent_map", {})
+        peers = cfg.get("peers", {})
         webui_agent = cfg.get("webui_agent", "neo")
-        if mapping:
+        mapping = cfg.get("user_agent_map", {})
+        # Invert: {agent_name: [username, ...]}
+        agent_to_users = {}
+        for user, agent in mapping.items():
+            agent_to_users.setdefault(agent.lower() if isinstance(agent, str) else agent, []).append(user)
+        worker_agents = sorted([name for name in peers if name != webui_agent])
+        if worker_agents:
             rows = "".join(
-                f'<tr><td><span class="tag">{_esc(u)}</span></td>'
-                f'<td><span class="tag">{_esc(a)}</span></td>'
-                f'<td><button class="btn btn-danger" onclick="remove(&#39;{_esc_js(u)}&#39;)">✕ 移除</button></td></tr>'
-                for u, a in sorted(mapping.items())
+                f'<tr><td><span class="tag">{_esc(a)}</span></td>'
+                f'<td><input class="map-input" data-agent="{_esc(a)}"'
+                f' value="{_esc(", ".join(agent_to_users.get(a, [])))}"'
+                f' placeholder="（留空则不绑定）"></td></tr>'
+                for a in worker_agents
             )
         else:
-            rows = '<tr><td colspan="3" class="empty">尚无映射条目</td></tr>'
+            rows = '<tr><td colspan="2" class="empty">尚无 Worker Agent（请先通过 Agent 管理添加）</td></tr>'
         html = _USER_AGENT_MAP_HTML.replace("{rows_html}", rows).replace("{webui_agent}", _esc(webui_agent))
         return HTMLResponse(html)
 
-    async def _user_agent_map_add(request: Request):
-        if not request.session.get("user"):
+    async def _user_agent_map_save(request: Request):
+        _su = request.session.get("user")
+        if not _su:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_su):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
         try:
             body = await request.json()
         except Exception:
             return JSONResponse({"ok": False, "error": "无效请求"}, status_code=400)
-        user = body.get("user", "").strip()
-        agent = body.get("agent", "").strip()
-        if not user or not agent:
-            return JSONResponse({"ok": False, "error": "用户和 agent 名不能为空"}, status_code=400)
-
+        new_mapping = body.get("mapping", {})
+        if not isinstance(new_mapping, dict):
+            return JSONResponse({"ok": False, "error": "mapping 须为对象"}, status_code=400)
+        clean = {}
+        for user, agent in new_mapping.items():
+            user = str(user).strip()
+            agent = str(agent).strip()
+            if user and agent:
+                clean[user] = agent
         cfg = load_config(force_reload=True)
-        mapping = cfg.setdefault("user_agent_map", {})
-        if user in mapping and mapping[user] == agent:
-            return JSONResponse({"ok": False, "error": f"'{user}' → '{agent}' 已存在"}, status_code=409)
-        mapping[user] = agent
+        cfg["user_agent_map"] = clean
         save_config(cfg)
-        # Update gatekeeper's in-memory mapping
-        if hasattr(gatekeeper, '_user_agent_map'):
-            gatekeeper._user_agent_map = mapping
-        if hasattr(gatekeeper._platform, '_user_agent_map'):
-            gatekeeper._platform._user_agent_map = mapping
-        return JSONResponse({"ok": True})
-
-    async def _user_agent_map_remove(request: Request):
-        if not request.session.get("user"):
-            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
-        try:
-            body = await request.json()
-        except Exception:
-            return JSONResponse({"ok": False, "error": "无效请求"}, status_code=400)
-        user = body.get("user", "").strip()
-        if not user:
-            return JSONResponse({"ok": False, "error": "用户名不能为空"}, status_code=400)
-
-        cfg = load_config(force_reload=True)
-        mapping = cfg.get("user_agent_map", {})
-        if user not in mapping:
-            return JSONResponse({"ok": False, "error": f"'{user}' 无映射"}, status_code=404)
-        del mapping[user]
-        save_config(cfg)
-        if hasattr(gatekeeper, '_user_agent_map'):
-            gatekeeper._user_agent_map = mapping
+        mapping = cfg["user_agent_map"]
         if hasattr(gatekeeper._platform, '_user_agent_map'):
             gatekeeper._platform._user_agent_map = mapping
         return JSONResponse({"ok": True})
@@ -345,8 +331,7 @@ def create_squad_admin_routes(app, gatekeeper):
     app.add_route("/config/commander/add", _commander_add, methods=["POST"])
     app.add_route("/config/commander/remove", _commander_remove, methods=["POST"])
     app.add_route("/config/user-agent-map", _user_agent_map_page, methods=["GET"])
-    app.add_route("/config/user-agent-map/add", _user_agent_map_add, methods=["POST"])
-    app.add_route("/config/user-agent-map/remove", _user_agent_map_remove, methods=["POST"])
+    app.add_route("/config/user-agent-map/save", _user_agent_map_save, methods=["POST"])
 
 
 def _esc(s: str) -> str:
@@ -357,3 +342,5 @@ def _esc(s: str) -> str:
 def _esc_js(s: str) -> str:
     """Escape a string for embedding in JS single-quoted string (via HTML entity)."""
     return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+
+_DENIED = "<h3 style='text-align:center;margin-top:60px;color:#e74c3c;'>🔒 仅 Commander 可访问此管理页面</h3>"

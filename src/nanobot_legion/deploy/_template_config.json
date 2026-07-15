@@ -1,11 +1,37 @@
 {
-  "gateway": {"host": "0.0.0.0", "port": 0},
+  "gateway": {
+    "host": "0.0.0.0",
+    "port": 0
+  },
   "channels": {
-    "websocket": {"port": 0},
-    "qq": {"enabled": true, "allow_from": ["*"]},
-    "weixin": {"enabled": true, "allow_from": ["*"]},
-    "feishu": {"enabled": true, "allow_from": ["*"]},
-    "dingtalk": {"enabled": true, "allow_from": ["*"]}
+    "websocket": {
+      "enabled": true,
+      "port": 0
+    },
+    "qq": {
+      "enabled": true,
+      "allow_from": [
+        "*"
+      ]
+    },
+    "weixin": {
+      "enabled": true,
+      "allow_from": [
+        "*"
+      ]
+    },
+    "feishu": {
+      "enabled": true,
+      "allow_from": [
+        "*"
+      ]
+    },
+    "dingtalk": {
+      "enabled": true,
+      "allow_from": [
+        "*"
+      ]
+    }
   },
   "tools": {
     "exec": {
