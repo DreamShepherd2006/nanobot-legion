@@ -6,8 +6,8 @@
   "webui_agent": "neo",
   "commander_whitelist": ["Stone2006", "DreamShepherd2006"],
   "user_agent_map": {
-    "DreamShepherd": "NANOBOT_PEER_MEDIC",
-    "Stone2006": "NANOBOT_PEER_NEO"
+    "DreamShepherd": "medic",
+    "Stone2006": "neo"
   },
   "relay_timeout": 120,
   "gatekeeper_port": 7860,

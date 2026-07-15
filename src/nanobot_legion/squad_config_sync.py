@@ -30,6 +30,7 @@ def _get_data_root():
 DATA_ROOT = _get_data_root()
 TEMPLATE = os.path.join(DATA_ROOT, "instances/_template/config.json")
 INSTANCES_ROOT = os.path.join(DATA_ROOT, "instances")
+print(f"🔍 [sync] DATA_ROOT={DATA_ROOT} INSTANCES_ROOT={INSTANCES_ROOT} MOUNT_PATH={os.environ.get('MOUNT_PATH','')}", flush=True)
 MAX_BACKUPS = 5  # keep last N backups per agent
 
 def _log(msg):
@@ -223,6 +224,27 @@ def sync_configs():
             if inst_name in squad:
                 cfg.setdefault("gateway", {})["port"] = squad[inst_name]["gateway_port"]
                 cfg.setdefault("channels", {}).setdefault("websocket", {})["port"] = squad[inst_name]["ws_port"]
+                cfg["channels"]["websocket"]["enabled"] = True
+                # Disable social channels for non-commander agents that lack account.json.
+                # Without credentials, their start() autoreload loops block ChannelManager.__init__
+                # indefinitely. If account.json exists, the channel is intentionally configured — leave it alone.
+                # Read webui_agent from squad_config.json (same file used by gatekeeper).
+                try:
+                    with open(os.environ.get('SQUAD_CONFIG_PATH', '/app/squad_config.json')) as f:
+                        squad_cfg = json.load(f)
+                    webui_agent = squad_cfg.get("webui_agent", "neo")
+                except Exception:
+                    webui_agent = "neo"
+                if inst_name != webui_agent:
+                    for ch in list(cfg.get("channels", {})):
+                        if ch != "websocket":
+                            account_file = os.path.join(INSTANCES_ROOT, inst_name, "channels", ch, "account.json")
+                            enabled_before = cfg["channels"][ch].get("enabled")
+                            if not os.path.exists(account_file):
+                                cfg["channels"][ch]["enabled"] = False
+                                print(f"🔍 [sync] {inst_name}/{ch}: no account.json → enabled: {enabled_before}→False", flush=True)
+                            else:
+                                print(f"🔍 [sync] {inst_name}/{ch}: account.json ✓ → enabled: {enabled_before} (unchanged)", flush=True)
                 port_mark = f"→ gw={squad[inst_name]['gateway_port']} ws={squad[inst_name]['ws_port']}"
             else:
                 port_mark = "(not in roster)"

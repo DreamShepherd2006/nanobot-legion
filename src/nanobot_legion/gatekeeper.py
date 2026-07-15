@@ -62,6 +62,9 @@ from .squad_admin import create_squad_admin_routes  # noqa: E402
 # Gatekeeper — single class owning all state
 # ═══════════════════════════════════════════════════════════════
 
+_DENIED = "<h3 style='text-align:center;margin-top:60px;color:#e74c3c;'>🔒 仅 Commander 或已映射用户可访问</h3>"
+
+
 class Gatekeeper:
     """Squad gatekeeper: HTTP reverse proxy, WS multiplexer, relay hub.
 
@@ -101,6 +104,7 @@ class Gatekeeper:
         self.latest_tasks: dict = {}                   # latest task payload
         self._boot_time: float = 0.0
         self._grace_ended: bool = False
+        self._gateway_ever_healthy: set[str] = set()  # agents whose /health ever returned 200
 
         # ── Tokens & paths (set in setup) ──────────────────────
         self._relay_token: str = ""
@@ -196,8 +200,8 @@ class Gatekeeper:
         nanobot_link = build_source_link(nanobot_info, "DreamShepherd2006/nanobot", "nightly")
         nanobot_legion_link = build_source_link(nanobot_legion_info, "DreamShepherd2006/nanobot-legion")
 
-        # Build content matching oauth_proxy.py BINDING_CHAT_CONTENT structure
-        _content = f"""\
+                # Two content variants: commander gets full admin, workers get channels only.
+        _content_commander = f"""\
 # 📱 社交通道配置
 
 将 nanobot 连接到社交通道，随时随地对话。
@@ -252,7 +256,7 @@ Agent 生成的输出文件存放在此，可随时下载。
 
 👉 [`/reset-setup`](/reset-setup)
 
----
+ ---
 
 # 📦 开源代码
 
@@ -265,6 +269,21 @@ Agent 生成的输出文件存放在此，可随时下载。
 | nanobot（AI 引擎） | {nanobot_link} |
 
 🧭 点击上方链接浏览完整代码，仓库中的 Dockerfile 可用于部署新空间。
+"""
+
+        _content_worker = f"""\
+# 📱 社交通道配置
+
+将 nanobot 连接到社交通道，随时随地对话。
+
+| 通道 | 操作 |
+|------|------|
+{_rows}
+
+👆 点击上方链接即可操作，无需在此聊天。
+
+> 💡 频道绑定后凭证写入当前 agent 目录，重启即生效。
+> 其他管理功能请使用 Commander 账号登录。
 """
 
         # Clean up old binding sessions — matches both current and legacy titles
@@ -305,27 +324,56 @@ Agent 生成的输出文件存放在此，可随时下载。
                 "last_consolidated": 0,
             },
             {
-                "role": "user", "content": _content,
+                "role": "user", "content": _content_commander,
                 "timestamp": _now,
             },
         ])
 
         # WebUI transcript
         self._platform.write_webui_transcript(_agent, _cid, [
-            {"event": "delta", "text": _content, "chat_id": _cid},
-            {"event": "stream_end", "text": _content, "chat_id": _cid},
+            {"event": "delta", "text": _content_commander, "chat_id": _cid},
+            {"event": "stream_end", "text": _content_commander, "chat_id": _cid},
             {"event": "turn_end", "chat_id": _cid},
         ])
 
-        # Pin to sidebar
-        _sidebar_state = self._platform.read_sidebar_state(_agent)
-        _sidebar_state.setdefault("pinned_keys", []).insert(0, _key)
-        _sidebar_state["updated_at"] = _now
-        _sidebar_state.setdefault("schema_version", 1)
-        self._platform.write_sidebar_state(_agent, _sidebar_state)
+        # Pin to sidebar — commander (neo) first, then replicate to all roster agents
+        # Non-commander users (routed via user_agent_map) get a worker-only view.
+        for _agent_name in list(self.agent_names) + ([_agent] if _agent not in self.agent_names else []):
+            # Choose content: full admin for neo, channels-only for workers
+            _agent_content = _content_commander if _agent_name == _agent else _content_worker
+            _sidebar_state = self._platform.read_sidebar_state(_agent_name)
+            _pinned = _sidebar_state.get("pinned_keys", [])
+            if _key not in _pinned:
+                _pinned.insert(0, _key)
+            _sidebar_state["pinned_keys"] = _pinned
+            _sidebar_state["updated_at"] = _now
+            _sidebar_state.setdefault("schema_version", 1)
+            self._platform.write_sidebar_state(_agent_name, _sidebar_state)
+            # Write session + transcript for non-commander agents
+            if _agent_name != _agent:
+                self._platform.write_session(_agent_name, _cid, [
+                    {
+                        "_type": "metadata", "key": _key,
+                        "created_at": _now, "updated_at": _now,
+                        "metadata": {"title": _BINDING_CHAT_TITLE, "webui": True,
+                                    "workspace_scope": {"project_path": _project_dir},
+                                    "_binding_type": "system_config"},
+                        "last_consolidated": 0,
+                    },
+                    {
+                        "role": "user", "content": _agent_content,
+                        "timestamp": _now,
+                    },
+                ])
+                self._platform.write_webui_transcript(_agent_name, _cid, [
+                    {"event": "delta", "text": _agent_content, "chat_id": _cid},
+                    {"event": "stream_end", "text": _agent_content, "chat_id": _cid},
+                    {"event": "turn_end", "chat_id": _cid},
+                ])
 
         self._binding_chat_cid = _cid
-        self._log(f"📌 pinned binding chat ({_cid[:12]}...) — {len(_bindings)} channels")
+        _agent_count = len(set(list(self.agent_names) + [_agent]))
+        self._log(f"📌 pinned binding chat ({_cid[:12]}...) — {len(_bindings)} channels, {_agent_count} agents")
 
     # ═══════════════════════════════════════════════════════════
     # [Section 2] Roster — squad_config.json peers as source of truth
@@ -411,18 +459,18 @@ Agent 生成的输出文件存放在此，可随时下载。
 
         Unified entry point for HTTP proxy routes (index, catch-all, sessions).
         Avoids duplicating session parsing logic across routes.
+        Returns empty target_agent / None ws_port for unauthorised users.
         """
         if not hasattr(request, "session"):
-            return "", self.webui_agent, self.squad_roster.get(
-                self.webui_agent, {}).get("ws_port")
+            return "", "", None
         session_user = request.session.get("user")
         uname = ""
         if isinstance(session_user, dict):
             uname = (session_user.get("preferred_username")
                      or session_user.get("username")
                      or session_user.get("name") or "")
-        target = self._get_agent_for_user(uname) if uname else self.webui_agent
-        ws_port = self.squad_roster.get(target, {}).get("ws_port")
+        target = self._get_agent_for_user(uname) if uname else ""
+        ws_port = self.squad_roster.get(target, {}).get("ws_port") if target else None
         return uname, target, ws_port
 
     # ═══════════════════════════════════════════════════════════
@@ -597,6 +645,7 @@ Agent 生成的输出文件存放在此，可随时下载。
                         resp = await client.get(
                             f"http://127.0.0.1:{gw_port}/health")
                     if resp.status_code == 200:
+                        self._gateway_ever_healthy.add(name)
                         if self.legion_status.get(name) == "offline":
                             offline_sec = now - self._offline_since.get(name, 0)
                             self._log(f"✅ [{name}] 恢复上线 (离线 {offline_sec:.0f}s)")
@@ -617,13 +666,18 @@ Agent 生成的输出文件存放在此，可随时下载。
 
         # ── PID check: agent thinking blocks event loop but process stays alive ──
         if self._is_agent_process_alive(name):
-            if self.legion_status.get(name) == "offline":
-                self._log(f"🟡 [{name}] PID 存活，疑似思考中（{reason}），恢复在线")
-                self.legion_status[name] = "online"
-                self._offline_since.pop(name, None)
-            return
+            # Two cases:
+            # A) Gateway was ever healthy → likely thinking, keep online
+            # B) Gateway was NEVER healthy → startup failure, treat as offline
+            if name in self._gateway_ever_healthy:
+                if self.legion_status.get(name) == "offline":
+                    self._log(f"🟡 [{name}] PID 存活，疑似思考中（{reason}），恢复在线")
+                    self.legion_status[name] = "online"
+                    self._offline_since.pop(name, None)
+                return
+            # Fall through: PID alive but gateway never up → genuine offline
 
-        # ── Process not found: genuine offline ──
+        # ── Process not found (or never-healthy startup failure) ──
         if self.legion_status.get(name) != "offline":
             self.legion_status[name] = "offline"
             self._offline_since[name] = now
@@ -648,6 +702,9 @@ Agent 生成的输出文件存放在此，可随时下载。
 
         self._resurrecting[name] = True
         self._log(f"🆘 [{name}] 失联 {elapsed:.0f}s，触发自动复活 → {script}")
+        # Clear ever-healthy flag so new process gets a fresh chance to prove itself
+        self._gateway_ever_healthy.discard(name)
+        self._offline_since.pop(name, None)
         try:
             subprocess.Popen(
                 ["setsid", "bash", script],
@@ -745,6 +802,11 @@ Agent 生成的输出文件存放在此，可随时下载。
 
     async def _handle_reset_setup(self, request: Request) -> JSONResponse:
         """GET /reset-setup — delete oauth.json to re-enter Phase 1 setup."""
+        _user = request.session.get("user")
+        if not _user:
+            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not self._platform.is_commander(_user):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
         from pathlib import Path
         deleted = []
         # Check multiple possible paths (HF vs MS, and edge cases)
@@ -986,6 +1048,8 @@ Agent 生成的输出文件存放在此，可随时下载。
 
     async def _handle_sessions(self, request: Request):
         _uname, target_agent, ws_port = self._resolve_user_context(request)
+        if not target_agent:
+            return JSONResponse({"error": "未授权访问"}, status_code=403)
         if not ws_port:
             ws_port = self.squad_roster.get(self.webui_agent, {}).get("ws_port", 20002)
 
@@ -1006,6 +1070,8 @@ Agent 生成的输出文件存放在此，可随时下载。
 
     async def _handle_sessions_sub(self, request: Request, path: str):
         _uname, target_agent, ws_port = self._resolve_user_context(request)
+        if not target_agent:
+            return JSONResponse({"error": "未授权访问"}, status_code=403)
         if not ws_port:
             ws_port = self.squad_roster.get(self.webui_agent, {}).get("ws_port", 20002)
 
@@ -1064,6 +1130,10 @@ Agent 生成的输出文件存放在此，可随时下载。
 </body>
 </html>""", status_code=200)
 
+        # Unauthorised authenticated user → 403
+        if not target_agent:
+            return HTMLResponse(_DENIED, status_code=403)
+
         # Authenticated → proxy to agent
         client = self._http_clients.get(target_agent)
         if not client:
@@ -1088,6 +1158,9 @@ Agent 生成的输出文件存放在此，可随时下载。
     async def _handle_catch_all(self, request: Request, path: str):
         """Proxy unmatched HTTP traffic to the user's assigned agent ws_port."""
         uname, target_agent, _ws_port = self._resolve_user_context(request)
+
+        if not target_agent:
+            return Response(content="Unauthorized", status_code=403)
 
         client = self._http_clients.get(target_agent)
         if not client:
@@ -1172,6 +1245,10 @@ Agent 生成的输出文件存放在此，可随时下载。
 
         # ── Determine primary agent ──
         primary_agent = self._get_agent_for_user(real_name)
+        if not primary_agent:
+            self._log(f"🚫 WS 拒绝: {real_name} (未授权)")
+            await client_ws.close(code=4001, reason="unauthorized")
+            return
         primary_info = self.squad_roster.get(
             primary_agent,
             self.squad_roster.get(self.webui_agent, {}))
@@ -1425,6 +1502,8 @@ def create_app() -> FastAPI:
         _bindings = []
     gk._bindings = _bindings
 
+    _DENIED_MSG = "<h3 style='text-align:center;margin-top:60px;color:#e74c3c;'>🔒 仅 Commander 或已映射用户可访问</h3>"
+
     for _spec in _bindings:
         _ch = _spec.name
         _html = _spec.bind_page_html
@@ -1433,6 +1512,9 @@ def create_app() -> FastAPI:
             _user = request.session.get("user")
             if not _user:
                 return RedirectResponse("/")
+            _username = gk._platform.extract_username(_user)
+            if not gk._platform.is_commander(_user) and not gk._platform.get_agent_for_user(_username):
+                return HTMLResponse(_DENIED, status_code=403)
             return HTMLResponse(_html)
 
         async def _bind_submit(request: Request, _ch=_ch):
@@ -1440,6 +1522,8 @@ def create_app() -> FastAPI:
             if not _user:
                 return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
             _username = gk._platform.extract_username(_user)
+            if not gk._platform.is_commander(_user) and not gk._platform.get_agent_for_user(_username):
+                return JSONResponse({"ok": False, "error": "仅 Commander 或已映射用户可绑定"}, status_code=403)
             _agent = gk._platform.get_agent_for_user(_username)
             if not _agent:
                 return JSONResponse(
@@ -1464,12 +1548,22 @@ def create_app() -> FastAPI:
 
             # Also update config.json so the channel is enabled
             _cfg = gk._platform.read_config(_agent)
-            _ch_cfg = _cfg.get("channels", {}).get(_ch, {})
+            _cfg_path = gk._platform._config_path(_agent)
+            _ch_cfg_before = _cfg.get("channels", {}).get(_ch, {})
+            print(f"🔍 [bind/{_ch}] READ config: {_cfg_path}", flush=True)
+            print(f"🔍 [bind/{_ch}] BEFORE: channels.{_ch}.enabled={_ch_cfg_before.get('enabled')}", flush=True)
+            _ch_cfg = _ch_cfg_before.copy() if _ch_cfg_before else {}
             _ch_cfg["enabled"] = True
             _ch_cfg.setdefault("allow_from", ["*"])
             _ch_cfg.update(dict(_form))
             _cfg.setdefault("channels", {})[_ch] = _ch_cfg
+            print(f"🔍 [bind/{_ch}] AFTER: channels.{_ch}.enabled={_cfg['channels'][_ch]['enabled']}", flush=True)
             gk._platform.write_config(_agent, _cfg)
+            print(f"🔍 [bind/{_ch}] WRITE config: {_cfg_path}", flush=True)
+            # Verify write persisted
+            _verify = gk._platform.read_config(_agent)
+            _vch = _verify.get("channels", {}).get(_ch, {})
+            print(f"🔍 [bind/{_ch}] VERIFY re-read: channels.{_ch}.enabled={_vch.get('enabled')}", flush=True)
 
             print(f"✅ /bind/{_ch}: user={_username} → agent={_agent}, creds → {_instance_dir}/channels/{_ch}/")
 
@@ -1502,26 +1596,100 @@ def create_app() -> FastAPI:
         for _suffix, _method, _handler in _spec.public_routes:
             if _suffix == "/submit":
                 continue
-            async def _sub_handler(request: Request, _handler=_handler):
-                if not request.session.get("user"):
+            async def _sub_handler(request: Request, _handler=_handler, _ch=_ch, _suffix=_suffix):
+                _user = request.session.get("user")
+                if not _user:
                     return JSONResponse({"error": "请先登录"}, status_code=401)
-                _username = gk._platform.extract_username(request.session.get("user"))
-                request.state.bound_agent = gk._platform.get_agent_for_user(_username) or "default"
-                return await _handler(request)
+                _username = gk._platform.extract_username(_user)
+                if not gk._platform.is_commander(_user) and not gk._platform.get_agent_for_user(_username):
+                    return JSONResponse({"error": "仅 Commander 或已映射用户可操作"}, status_code=403)
+                _agent = gk._platform.get_agent_for_user(_username) or "default"
+                request.state.bound_agent = _agent
+                result = await _handler(request)
+                # Extract binding status from handler return.
+                # Some bindings (wechat) return a Starlette Response wrapping JSON,
+                # others return a plain dict.
+                _status = None
+                if isinstance(result, dict):
+                    _status = result.get("status")
+                elif hasattr(result, 'body'):
+                    import json
+                    try:
+                        _body = json.loads(result.body)
+                        _status = _body.get("status") if isinstance(_body, dict) else None
+                    except Exception:
+                        pass
+                # When scan-based binding confirms, enable channel in agent's config
+                if _status == "confirmed" and _agent != "default":
+                    _cfg_key = "weixin" if _ch == "wechat" else _ch
+                    _cfg = gk._platform.read_config(_agent)
+                    _cfg.setdefault("channels", {}).setdefault(_cfg_key, {"allow_from": ["*"]})
+                    _cfg["channels"][_cfg_key]["enabled"] = True
+                    gk._platform.write_config(_agent, _cfg)
+                    print(f"[GATEKEEPER] 🔓 已启用 {_agent}/{_cfg_key} 通道（{_ch} 扫码绑定确认）", flush=True)
+                return result
             _app.add_api_route(f"/bind/{_ch}{_suffix}", _sub_handler, methods=[_method])
 
     # ── Agent management routes ───────────────────────────────
     create_agent_routes(_app, gk)
     create_squad_admin_routes(_app, gk)
 
-    # ── File manager routes ────────────────────────────────────
-    _app.add_api_route("/files", file_manager.list_page, methods=["GET"], response_model=None)
-    _app.add_api_route("/files/", file_manager.list_page, methods=["GET"], response_model=None)
-    _app.add_api_route("/files/view/{path:path}", file_manager.view_file, methods=["GET"], response_model=None)
-    _app.add_api_route("/files/upload", file_manager.upload_file, methods=["POST"], response_model=None)
-    _app.add_api_route("/files/delete/{path:path}", file_manager.delete_entry, methods=["DELETE"], response_model=None)
-    _app.add_api_route("/files/mkdir", file_manager.mkdir, methods=["POST"], response_model=None)
-    _app.add_api_route("/files/touch", file_manager.touch_file, methods=["POST"], response_model=None)
+    # ── File manager routes (commander-only) ───────────────────
+    async def _fm_list_page(request: Request):
+        _u = request.session.get("user")
+        if not _u:
+            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gk._platform.is_commander(_u):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
+        return await file_manager.list_page(request)
+
+    async def _fm_view_file(request: Request):
+        _u = request.session.get("user")
+        if not _u:
+            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gk._platform.is_commander(_u):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
+        return await file_manager.view_file(request)
+
+    async def _fm_upload_file(request: Request):
+        _u = request.session.get("user")
+        if not _u:
+            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gk._platform.is_commander(_u):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
+        return await file_manager.upload_file(request)
+
+    async def _fm_delete_entry(request: Request):
+        _u = request.session.get("user")
+        if not _u:
+            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gk._platform.is_commander(_u):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
+        return await file_manager.delete_entry(request)
+
+    async def _fm_mkdir(request: Request):
+        _u = request.session.get("user")
+        if not _u:
+            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gk._platform.is_commander(_u):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
+        return await file_manager.mkdir(request)
+
+    async def _fm_touch_file(request: Request):
+        _u = request.session.get("user")
+        if not _u:
+            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gk._platform.is_commander(_u):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
+        return await file_manager.touch_file(request)
+
+    _app.add_api_route("/files", _fm_list_page, methods=["GET"], response_model=None)
+    _app.add_api_route("/files/", _fm_list_page, methods=["GET"], response_model=None)
+    _app.add_api_route("/files/view/{path:path}", _fm_view_file, methods=["GET"], response_model=None)
+    _app.add_api_route("/files/upload", _fm_upload_file, methods=["POST"], response_model=None)
+    _app.add_api_route("/files/delete/{path:path}", _fm_delete_entry, methods=["DELETE"], response_model=None)
+    _app.add_api_route("/files/mkdir", _fm_mkdir, methods=["POST"], response_model=None)
+    _app.add_api_route("/files/touch", _fm_touch_file, methods=["POST"], response_model=None)
 
     # ── Wire routes ───────────────────────────────────────────
     _app.get("/health")(gk._handle_health)

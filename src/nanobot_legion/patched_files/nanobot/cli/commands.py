@@ -924,6 +924,10 @@ def _run_gateway(
         runtime_events=runtime_events,
         provider_signature=provider_snapshot.signature,
     )
+    # ── LEGION startup diag ──
+    import sys as _sy
+    _sy.stderr.write(f"[STARTUP_DIAG] gw={config.gateway.port} ✅ agent={os.path.basename(os.path.dirname(config.agents.defaults.workspace))} created, entering setup...\n")
+    _sy.stderr.flush()
     WebuiTurnCoordinator(
         bus=bus,
         sessions=session_manager,
@@ -1154,6 +1158,9 @@ def _run_gateway(
 
     # Create channel manager (forwards SessionManager so the WebSocket channel
     # can serve the embedded webui's REST surface).
+    # ── LEGION startup diag: entering channel creation ──
+    _sy.stderr.write(f"[STARTUP_DIAG] gw={config.gateway.port} ✅ agent={os.path.basename(os.path.dirname(config.agents.defaults.workspace))} about to create ChannelManager...\n")
+    _sy.stderr.flush()
     channels = ChannelManager(
         config,
         bus,
@@ -1163,6 +1170,10 @@ def _run_gateway(
         webui_runtime_surface=webui_runtime_surface,
         webui_runtime_capabilities=webui_runtime_capabilities,
     )
+
+    # ── LEGION startup diag: channels created ──
+    _sy.stderr.write(f"[STARTUP_DIAG] gw={config.gateway.port} ✅ agent={os.path.basename(os.path.dirname(config.agents.defaults.workspace))} channels created: enabled={sorted(channels.enabled_channels)}\n")
+    _sy.stderr.flush()
 
     def _pick_heartbeat_target() -> tuple[str, str]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""
@@ -1233,6 +1244,9 @@ def _run_gateway(
 
         server = await asyncio.start_server(handle, host, health_port)
         console.print(f"[green]✓[/green] Health endpoint: http://{host}:{health_port}/health")
+        # ── LEGION startup diag: health server started ──
+        _sy.stderr.write(f"[STARTUP_DIAG] gw={config.gateway.port} ✅ agent={os.path.basename(os.path.dirname(config.agents.defaults.workspace))} {host}:{health_port} /health serving\n")
+        _sy.stderr.flush()
         async with server:
             await server.serve_forever()
     # Register Dream system job (idempotent on restart)
@@ -1316,6 +1330,9 @@ def _run_gateway(
             if flushed:
                 logger.info("Shutdown: flushed {} session(s) to disk", flushed)
 
+    # ── LEGION startup diag: entering event loop ──
+    _sy.stderr.write(f"[STARTUP_DIAG] gw={config.gateway.port} ✅ agent={os.path.basename(os.path.dirname(config.agents.defaults.workspace))} entering asyncio.run(run())\n")
+    _sy.stderr.flush()
     asyncio.run(run())
 
 

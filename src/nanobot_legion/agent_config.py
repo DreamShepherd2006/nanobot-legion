@@ -149,6 +149,21 @@ _HTML = r"""\
   .agent-link { color: #1a56db; text-decoration: none; }
   .agent-link:hover { text-decoration: underline; }
   .archived-row td { color:#888; }
+  .conflict-card { display:flex; gap:16px; margin:16px 0; flex-wrap:wrap; }
+  .conflict-col { flex:1 1 260px; background:#fff; border:2px solid #ddd; border-radius:8px; padding:14px; min-width:240px; }
+  .conflict-col h3 { font-size:.95em; margin-bottom:10px; }
+  .conflict-col.existing h3 { color:#e65100; }
+  .conflict-col.archived h3 { color:#1565c0; }
+  .conflict-row { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px dotted #f0f0f0; font-size:.88em; }
+  .conflict-row .k { color:#888; }
+  .conflict-row .v { font-weight:600; max-width:60%; text-align:right; word-break:break-all; }
+  .conflict-actions { display:flex; gap:12px; margin:12px 0; flex-wrap:wrap; }
+  .conflict-btn { flex:1 1 auto; padding:12px 16px; border-radius:6px; font-size:.9em; cursor:pointer; border:none; font-weight:600; }
+  .conflict-btn.keep { background:#fff3e0; color:#e65100; border:2px solid #e65100; }
+  .conflict-btn.keep:hover { background:#ffe0b2; }
+  .conflict-btn.take { background:#e3f2fd; color:#1565c0; border:2px solid #1565c0; }
+  .conflict-btn.take:hover { background:#bbdefb; }
+  .diff-val { color:#c62828; }
 </style>
 </head>
 <body>
@@ -314,6 +329,57 @@ async function restoreAgent(name, dirName) {
     if (data.ok) {
       result.innerHTML = '<div class="ok">✅ ' + data.msg + '</div>';
       setTimeout(() => { window.location.reload(); }, 1500);
+    } else if (data.conflict) {
+      showConflict(name, dirName, data.existing, data.archived);
+    } else {
+      result.innerHTML = '<div class="err">❌ ' + data.error + '</div>';
+    }
+  } catch(err) {
+    result.innerHTML = '<div class="err">❌ 提交失败: ' + err.message + '</div>';
+  }
+}
+function showConflict(name, dirName, existing, archived) {
+  const result = document.getElementById('result');
+  let chDiff = '', provDiff = '', modelDiff = '';
+  if (JSON.stringify(existing.channels) !== JSON.stringify(archived.channels)) chDiff = ' diff-val';
+  if (existing.provider !== archived.provider) provDiff = ' diff-val';
+  if (existing.model !== archived.model) modelDiff = ' diff-val';
+  function chs(arr) { return (arr && arr.length) ? arr.join(', ') : '<span style="color:#999">—</span>'; }
+  result.innerHTML = '<div class="conflict-card">' +
+    '<div class="conflict-col existing"><h3>📁 运行中的 Agent（在编）</h3>' +
+    '<div class="conflict-row"><span class="k">服务商</span><span class="v' + provDiff + '">' + h(existing.provider) + '</span></div>' +
+    '<div class="conflict-row"><span class="k">模型</span><span class="v' + modelDiff + '">' + h(existing.model) + '</span></div>' +
+    '<div class="conflict-row"><span class="k">网关端口</span><span class="v">' + (existing.gateway_port||'?') + '</span></div>' +
+    '<div class="conflict-row"><span class="k">WS 端口</span><span class="v">' + (existing.ws_port||'?') + '</span></div>' +
+    '<div class="conflict-row"><span class="k">已启通道</span><span class="v' + chDiff + '">' + chs(existing.channels) + '</span></div>' +
+    '</div>' +
+    '<div class="conflict-col archived"><h3>📦 待恢复的归档版本 (' + dirName.slice(-15) + ')</h3>' +
+    '<div class="conflict-row"><span class="k">服务商</span><span class="v' + provDiff + '">' + h(archived.provider) + '</span></div>' +
+    '<div class="conflict-row"><span class="k">模型</span><span class="v' + modelDiff + '">' + h(archived.model) + '</span></div>' +
+    '<div class="conflict-row"><span class="k">网关端口</span><span class="v">' + (archived.gateway_port||'?') + '</span></div>' +
+    '<div class="conflict-row"><span class="k">WS 端口</span><span class="v">' + (archived.ws_port||'?') + '</span></div>' +
+    '<div class="conflict-row"><span class="k">已启通道</span><span class="v' + chDiff + '">' + chs(archived.channels) + '</span></div>' +
+    '</div>' +
+    '</div>' +
+    '<div class="conflict-actions">' +
+    '<button class="conflict-btn keep" onclick="resolveConflict(\'' + name + '\',\'' + dirName + '\',\'keep\')">✅ 保留现有，废弃归档</button>' +
+    '<button class="conflict-btn take" onclick="resolveConflict(\'' + name + '\',\'' + dirName + '\',\'take\')">📦 恢复归档，废弃现有</button>' +
+    '</div>';
+  function h(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+}
+async function resolveConflict(name, dirName, choice) {
+  const result = document.getElementById('result');
+  result.innerHTML = '';
+  try {
+    const resp = await fetch('/config/agents/restore-confirm', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name, dir_name: dirName, choice: choice})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      result.innerHTML = '<div class="ok">✅ ' + data.msg + '</div>';
+      setTimeout(() => { window.location.reload(); }, 2000);
     } else {
       result.innerHTML = '<div class="err">❌ ' + data.error + '</div>';
     }
@@ -731,12 +797,37 @@ def _sync_roster(gatekeeper, squad_cfg: dict):
 def create_agent_routes(app, gatekeeper):
     """Mount agent management routes on gatekeeper's FastAPI app."""
 
+    def _read_config_summary(instances_dir: str, agent_dir_name: str) -> dict:
+        """Read config.json from an agent directory and return key fields for comparison.
+        Returns {} on failure."""
+        cfg_path = os.path.join(instances_dir, agent_dir_name, "config.json")
+        try:
+            with open(cfg_path) as f:
+                cfg = json.load(f)
+            agents = cfg.get("agents", {})
+            defaults = agents.get("defaults", {}) if isinstance(agents, dict) else {}
+            channels_cfg = cfg.get("channels", {})
+            enabled_channels = sorted(
+                [k for k, v in channels_cfg.items() if isinstance(v, dict) and v.get("enabled")]
+            ) if isinstance(channels_cfg, dict) else []
+            return {
+                "provider": defaults.get("provider", "?"),
+                "model": defaults.get("model", "?"),
+                "gateway_port": cfg.get("gateway", {}).get("port", "?"),
+                "ws_port": channels_cfg.get("websocket", {}).get("port", "?") if isinstance(channels_cfg, dict) else "?",
+                "channels": enabled_channels,
+            }
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return {}
+
     async def _agent_page(request: Request):
         """GET /config/agents — show agent list + add form."""
         _user = request.session.get("user")
         if not _user:
             from starlette.responses import RedirectResponse
             return RedirectResponse("/")
+        if not gatekeeper._platform.is_commander(_user):
+            return HTMLResponse(_DENIED, status_code=403)
 
         squad_cfg = load_config()
         neo_cfg = _get_neo_config(squad_cfg)
@@ -763,6 +854,8 @@ def create_agent_routes(app, gatekeeper):
         _user = request.session.get("user")
         if not _user:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_user):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
 
         try:
             body = await request.json()
@@ -901,6 +994,8 @@ def create_agent_routes(app, gatekeeper):
         _user = request.session.get("user")
         if not _user:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_user):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
 
         try:
             body = await request.json()
@@ -995,6 +1090,8 @@ def create_agent_routes(app, gatekeeper):
         _user = request.session.get("user")
         if not _user:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_user):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
 
         try:
             body = await request.json()
@@ -1027,7 +1124,37 @@ def create_agent_routes(app, gatekeeper):
             if os.path.isdir(dst_dir) and not os.path.isfile(cfg_path):
                 shutil.rmtree(dst_dir)
             else:
-                return JSONResponse({"ok": False, "error": f"Agent '{name}' 目录已存在（可能已恢复或正在运行）"}, status_code=409)
+                peers_check = squad_cfg.get("peers", {})
+                if name not in peers_check:
+                    # Orphan directory (not in roster) — auto-discard and proceed.
+                    # The agent was removed from peers but its directory was left behind.
+                    discarded_base = os.path.join(instances_dir, ".discarded")
+                    os.makedirs(discarded_base, exist_ok=True)
+                    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    try:
+                        shutil.move(dst_dir, os.path.join(discarded_base, f"{name}.orphan.{ts}"))
+                    except OSError:
+                        pass  # best-effort, fall through to restore
+                else:
+                    # ── genuine conflict: agent IS in roster ─────────────
+                    existing = _read_config_summary(instances_dir, name)
+                    archived = _read_config_summary(instances_dir, dir_name)
+                    if not existing:
+                        return JSONResponse({
+                            "ok": False,
+                            "error": f"Agent '{name}' 目录已存在但无法读取配置，请手动检查 {dst_dir}"
+                        }, status_code=500)
+                    if not archived:
+                        return JSONResponse({
+                            "ok": False,
+                            "error": f"归档目录 '{dir_name}' 中无有效 config.json"
+                        }, status_code=500)
+                    return JSONResponse({
+                        "ok": False,
+                        "conflict": True,
+                        "existing": existing,
+                        "archived": archived,
+                    })
 
         peers = squad_cfg.get("peers", {})
         if name in peers:
@@ -1100,11 +1227,144 @@ def create_agent_routes(app, gatekeeper):
             "msg": f"Agent '{name}' 已恢复（端口 {peers[name]['gateway_port']}/{peers[name]['ws_port']}），已加入复活白名单。WebUI 侧边栏已更新。",
         })
 
+    async def _restore_agent_confirm(request: Request):
+        """POST /config/agents/restore-confirm — resolve a restore conflict."""
+        _user = request.session.get("user")
+        if not _user:
+            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_user):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "无效的请求格式"}, status_code=400)
+
+        name = (body.get("name", "") or "").strip()
+        dir_name = (body.get("dir_name", "") or "").strip()
+        choice = (body.get("choice", "") or "").strip()
+
+        if not name or not dir_name or choice not in ("keep", "take"):
+            return JSONResponse({
+                "ok": False, "error": "缺少 name/dir_name/choice（choice 须为 keep 或 take）"
+            }, status_code=400)
+
+        squad_cfg = load_config()
+        data_root = squad_cfg.get("data_root", "/data")
+        instances_dir = os.path.join(data_root, "instances")
+        src_dir = os.path.join(instances_dir, dir_name)
+        dst_dir = os.path.join(instances_dir, name)
+
+        if not dir_name.startswith(name + ".removed."):
+            return JSONResponse({"ok": False, "error": f"dir_name 与 name 不匹配"}, status_code=400)
+        if not os.path.isdir(src_dir):
+            return JSONResponse({"ok": False, "error": f"归档目录 '{dir_name}' 不存在"}, status_code=404)
+
+        discarded_base = os.path.join(instances_dir, ".discarded")
+        os.makedirs(discarded_base, exist_ok=True)
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        if choice == "keep":
+            dst = os.path.join(discarded_base, f"{dir_name}")
+            try:
+                shutil.move(src_dir, dst)
+                return JSONResponse({
+                    "ok": True,
+                    "msg": f"已保留现有 Agent '{name}'，归档 '{dir_name}' 已移至 .discarded/"
+                })
+            except OSError as e:
+                return JSONResponse({
+                    "ok": False, "error": f"移动归档失败: {e}"
+                }, status_code=500)
+
+        discarded_dst = os.path.join(discarded_base, f"{name}.{ts}")
+        try:
+            shutil.move(dst_dir, discarded_dst)
+        except OSError as e:
+            return JSONResponse({
+                "ok": False, "error": f"备份现有目录失败: {e}"
+            }, status_code=500)
+
+        try:
+            shutil.move(src_dir, dst_dir)
+        except OSError as e:
+            try:
+                shutil.move(discarded_dst, dst_dir)
+            except OSError:
+                pass
+            return JSONResponse({
+                "ok": False, "error": f"恢复归档失败: {e}"
+            }, status_code=500)
+
+        gw = 0
+        ws = 0
+        config_path = os.path.join(dst_dir, "config.json")
+        try:
+            with open(config_path) as f:
+                cfg = json.load(f)
+            gateway = cfg.get("gateway", {})
+            if isinstance(gateway, dict):
+                gw = gateway.get("port", 0)
+            channels = cfg.get("channels", {})
+            ws_cfg = channels.get("websocket", {}) if isinstance(channels, dict) else {}
+            ws = ws_cfg.get("port", 0) if isinstance(ws_cfg, dict) else 0
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+
+        peers = squad_cfg.get("peers", {})
+        if name in peers:
+            return JSONResponse({
+                "ok": False,
+                "error": f"Agent '{name}' 已在 peers 列表中（可能已恢复）"
+            }, status_code=409)
+
+        if isinstance(gw, (int, float)) and gw > 0 and isinstance(ws, (int, float)) and ws > 0:
+            gw_int, ws_int = int(gw), int(ws)
+            used_ports = set()
+            for info in peers.values():
+                for k in ("gateway_port", "ws_port"):
+                    v = info.get(k, 0)
+                    if isinstance(v, (int, float)) and v > 0:
+                        used_ports.add(int(v))
+            used_ports |= _get_listening_ports()
+            if gw_int in used_ports or ws_int in used_ports:
+                gw_int, ws_int = _allocate_ports(peers)
+                _patch_agent_config_port(dst_dir, gw_int, ws_int)
+            peers[name] = {"id": f"squad:{name}", "gateway_port": gw_int, "ws_port": ws_int}
+        else:
+            gw, ws = _allocate_ports(peers)
+            peers[name] = {"id": f"squad:{name}", "gateway_port": gw, "ws_port": ws}
+
+        whitelist = list(squad_cfg.get("resurrection_whitelist", ["neo"]))
+        if not isinstance(whitelist, list):
+            whitelist = list(whitelist) if hasattr(whitelist, '__iter__') else ["neo"]
+        if name not in whitelist:
+            whitelist.append(name)
+        squad_cfg["resurrection_whitelist"] = whitelist
+        squad_cfg["peers"] = peers
+
+        try:
+            save_config(squad_cfg)
+        except OSError as e:
+            return JSONResponse({
+                "ok": True,
+                "msg": f"Agent '{name}' 已恢复（端口 {peers[name]['gateway_port']}/{peers[name]['ws_port']}），现有版本已移至 .discarded/。squad_config 更新失败: {e}"
+            }, status_code=201)
+
+        _sync_roster(gatekeeper, squad_cfg)
+
+        return JSONResponse({
+            "ok": True,
+            "msg": f"Agent '{name}' 已从归档恢复（端口 {peers[name]['gateway_port']}/{peers[name]['ws_port']}），已加入复活白名单。现有版本已移至 .discarded/{name}.{ts}。"
+        })
+
     async def _delete_permanent_agent(request: Request):
         """POST /config/agents/delete-permanent — permanently delete an archived agent."""
         _user = request.session.get("user")
         if not _user:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_user):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
 
         try:
             body = await request.json()
@@ -1156,6 +1416,8 @@ def create_agent_routes(app, gatekeeper):
         _user = request.session.get("user")
         if not _user:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_user):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
 
         try:
             body = await request.json()
@@ -1177,6 +1439,17 @@ def create_agent_routes(app, gatekeeper):
         mount_path = data_root  # In Staging, data_root == /data (/data → /mnt/workspace for MS)
 
         config_path = os.path.join(mount_path, "instances", name, "config.json")
+        print(f"🔍 [agent_config/start] data_root={data_root} config_path={config_path}", flush=True)
+        # Diagnostic: show social channel state
+        try:
+            with open(config_path) as _df:
+                _dc = json.load(_df)
+            for _ch_name in ("qq", "weixin", "feishu", "dingtalk"):
+                _ch = _dc.get("channels", {}).get(_ch_name, {})
+                _acct = os.path.join(mount_path, "instances", name, "channels", _ch_name, "account.json")
+                print(f"🔍 [agent_config/start] {_ch_name}: enabled={_ch.get('enabled')} account.json={'✓' if os.path.exists(_acct) else '✗'}", flush=True)
+        except Exception:
+            pass
         workspace_path = os.path.join(mount_path, "instances", name, "workspace")
         channel_dir = os.path.join(mount_path, "instances", name, "channels")
         log_dir = os.path.join(mount_path, "instances", name, "workspace", "logs")
@@ -1252,6 +1525,8 @@ def create_agent_routes(app, gatekeeper):
         _user = request.session.get("user")
         if not _user:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_user):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
 
         try:
             body = await request.json()
@@ -1304,6 +1579,8 @@ def create_agent_routes(app, gatekeeper):
         _user = request.session.get("user")
         if not _user:
             return HTMLResponse("<h3>请先登录</h3>", status_code=401)
+        if not gatekeeper._platform.is_commander(_user):
+            return HTMLResponse(_DENIED, status_code=403)
 
         name = request.path_params.get("name", "")
         if not name or name in ("add", "remove", "restore", "delete-permanent", "start", "stop"):
@@ -1458,6 +1735,8 @@ async function saveConfig(name) {{
         _user = request.session.get("user")
         if not _user:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_user):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
 
         name = request.path_params.get("name", "")
         if not name:
@@ -1521,8 +1800,11 @@ async function saveConfig(name) {{
     app.post("/config/agents/add")(_add_agent)
     app.post("/config/agents/remove")(_remove_agent)
     app.post("/config/agents/restore")(_restore_agent)
+    app.post("/config/agents/restore-confirm")(_restore_agent_confirm)
     app.post("/config/agents/delete-permanent")(_delete_permanent_agent)
     app.post("/config/agents/start")(_start_agent)
     app.post("/config/agents/stop")(_stop_agent)
     app.get("/config/agents/{name}")(_agent_detail)
     app.post("/config/agents/{name}/save")(_save_agent_detail)
+
+_DENIED = "<h3 style='text-align:center;margin-top:60px;color:#e74c3c;'>🔒 仅 Commander 可访问此管理页面</h3>"
