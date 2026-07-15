@@ -1189,6 +1189,29 @@ Agent 生成的输出文件存放在此，可随时下载。
                 request.method, url, headers=headers,
                 content=await request.body())
             rp_resp = await client.send(rp_req, stream=True)
+
+            # Fix ws_url in bootstrap response (synced from oauth_proxy.py).
+            # nanobot >= dbdb146f constructs ws_url from the Host header; when
+            # gatekeeper strips Host (proxy_header_blacklist), nanobot falls back
+            # to 127.0.0.1:port. Rewrite ws_url → relative ws_path so the browser
+            # always connects through the gatekeeper proxy.
+            if path == "webui/bootstrap" and rp_resp.status_code == 200:
+                body = await rp_resp.aread()
+                try:
+                    data = json.loads(body)
+                    ws_path = data.get("ws_path", "")
+                    if ws_path:
+                        data["ws_url"] = ws_path
+                        body = json.dumps(data).encode("utf-8")
+                        self._log("bootstrap ws_url → ws_path (Host header fix)")
+                except Exception as exc:
+                    self._log(f"bootstrap ws_url fix skipped: {exc}")
+                return Response(
+                    content=body,
+                    status_code=rp_resp.status_code,
+                    headers=dict(rp_resp.headers),
+                    media_type=rp_resp.headers.get("content-type", "application/json"))
+
             return StreamingResponse(
                 rp_resp.aiter_raw(),
                 status_code=rp_resp.status_code,
