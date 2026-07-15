@@ -178,8 +178,8 @@ class Gatekeeper:
         import uuid as _uuid, time as _time
 
         # Match oauth_proxy.py constants — keep in sync with cloud-agent-gateway
-        _BINDING_CHAT_TITLE = "社交通道配置指南"
-        _LEGACY_BINDING_TITLES = ["社交通道配置提示"]
+        _BINDING_CHAT_TITLE = "配置中心"
+        _LEGACY_BINDING_TITLES = ["社交通道配置提示", "社交通道配置指南"]
         _BINDING_PROJECT = "系统配置"
         _agent = self.webui_agent
         _now = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
