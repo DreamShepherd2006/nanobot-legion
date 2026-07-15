@@ -7,9 +7,10 @@ Usage (in Dockerfile):
 Steps:
   1. Copy patched Python files → site-packages/nanobot/
   2. Copy vanilla webui dist → /app/vanilla_webui/
-     (single-agent mode — entrypoint.sh symlinks at runtime)
-  3. Copy Legion-patched webui dist → /app/legion_webui/
-     (Legion mode — launch.sh symlinks at runtime)
+      (single-agent mode — entrypoint.sh uses NANOBOT_WEBUI_DIST)
+  3. Copy Legion webui source → /app/legion_webui_src/
+      (Dockerfile builds it → /app/legion_webui/;
+       Legion mode — launch.sh uses NANOBOT_WEBUI_DIST)
   4. Extract deploy assets (entrypoint.sh, launch.sh, configs, etc.)
 """
 
@@ -73,9 +74,10 @@ def _deploy_webui_dist(nanobot_dir: Path, pkg_dir: Path) -> None:
     else:
         print("  ⚠️  vanilla_webui_dist empty — single-agent webui not available")
 
-    # Target 2: Legion-patched webui → /app/legion_webui/
-    legion_src = pkg_dir / "webui_dist"
-    dst_legion = Path("/app/legion_webui")
+    # Target 2: Legion webui source → /app/legion_webui_src/
+    #   (built by Dockerfile after install — not pre-built dist)
+    legion_src = pkg_dir / "deploy" / "webui_src"
+    dst_legion = Path("/app/legion_webui_src")
 
     if legion_src.is_dir() and any(legion_src.iterdir()):
         if dst_legion.exists():
@@ -88,9 +90,9 @@ def _deploy_webui_dist(nanobot_dir: Path, pkg_dir: Path) -> None:
             else:
                 shutil.copy2(item, d)
         n = sum(1 for _ in dst_legion.rglob("*") if _.is_file())
-        print(f"  ✅ legion webui → {dst_legion} ({n} files)")
+        print(f"  ✅ legion webui source → {dst_legion} ({n} files)")
     else:
-        print("  ⚠️  webui_dist empty — Legion webui not available")
+        print("  ⚠️  webui_src empty — Legion webui not available")
 
 
 def main() -> None:
