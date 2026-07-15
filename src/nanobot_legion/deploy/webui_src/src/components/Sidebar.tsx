@@ -369,74 +369,102 @@ export function Sidebar(props: SidebarProps) {
   /* ── Legion: console state ── */
   const { client } = useClient();
   const [showConsole, setShowConsole] = useState(false);
+  const [allLogs, setAllLogs] = useState<string[]>([]);
   const [agentLogs, setAgentLogs] = useState<Record<string, string[]>>({});
-  const [activeTab, setActiveTab] = useState<string>("all");
+  const [activeTab, setActiveTab] = useState("all");
   const [legionPeers, setLegionPeers] = useState<Record<string, { id: string; name?: string }>>({});
   const [legionStatus, setLegionStatus] = useState<Record<string, string>>({});
-  const [nanobotVersion, setNanobotVersion] = useState<string | undefined>();
-  const [taskData, setTaskData] = useState<any>(null);
+  const [nanobotVersion, setNanobotVersion] = useState<string>("...");
+  const [taskData, setTaskData] = useState<{goal: string; tasks: Array<{id: string; title: string; agent?: string; status: string}>} | null>(null);
 
+  /* derive logs + tabs dynamically */
   const agentIds = Object.keys(legionPeers).sort();
+  const allTabs = ["all", ...agentIds];
+  const logs: Record<string, string[]> = { all: allLogs, ...agentLogs };
+
+  /* ── derive agent action summaries from latest log per agent ── */
   const agentActions = useMemo(() => {
-    const m: Record<string, string> = {};
-    for (const id of agentIds) {
-      const st = legionStatus[id] || "offline";
-      const name = legionPeers[id]?.name || id;
-      if (st === "executing") m[id] = `🤔 ${name} 思考中…`;
-      else if (st === "online") m[id] = `✅ ${name} 就绪`;
-      else if (st === "blocked") m[id] = `🚫 ${name} 阻塞`;
-      else m[id] = `⏳ ${name} 离线`;
+    const acts: Record<string, string> = {};
+    for (const agent of agentIds) {
+      const lines = agentLogs[agent] || [];
+      if (lines.length === 0) {
+        const st = legionStatus[agent];
+        acts[agent] = st === "executing" ? "工作中" : st === "blocked" ? "阻塞" : st === "online" ? "就绪" : "离线";
+        continue;
+      }
+      const last = lines[lines.length - 1];
+      const match = last.match(/\[[\d:]+\]\s+\S+\s+(.+)/);
+      acts[agent] = match ? match[1].slice(0, 60) : last.slice(0, 60);
     }
-    return m;
-  }, [agentIds, legionPeers, legionStatus]);
+    return acts;
+  }, [agentLogs, agentIds, legionStatus]);
 
-  const allTabs = useMemo(() => {
-    const tabs = Object.keys(agentLogs).filter(k => (agentLogs[k] || []).length > 0);
-    tabs.sort();
-    return ["all", ...tabs];
-  }, [agentLogs]);
+  /* ── helper: push line to a named bin ── */
+  function _pushLog(bin: string, line: string, max: number) {
+    setAllLogs(prev => [...prev, line].slice(-500));
+    if (bin !== "all") {
+      setAgentLogs(prev => {
+        const cur = prev[bin] || [];
+        return { ...prev, [bin]: [...cur, line].slice(-max) };
+      });
+    }
+  }
 
-  const logs = useMemo(() => {
-    if (activeTab === "all") return agentLogs;
-    return { [activeTab]: agentLogs[activeTab] || [] };
-  }, [activeTab, agentLogs]);
-
-  const _pushLog = (agent: string, msg: string) => {
-    setAgentLogs(prev => {
-      const next = { ...prev };
-      next[agent] = [...(next[agent] || []), msg].slice(-50);
-      return next;
-    });
-  };
-
+  /* ── Legion: event capture ── */
   useEffect(() => {
     if (!client) return;
-    const unsub = client.onAnyEvent((ev: any) => {
-      switch (ev.event) {
-        case "legion_update": {
-          if (ev.peers) setLegionPeers(ev.peers);
-          if (ev.status) setLegionStatus(ev.status);
-          if (ev.version) setNanobotVersion(ev.version);
-          if (ev.tasks) setTaskData(ev.tasks);
-          if (ev.log && ev.agent) _pushLog(ev.agent, ev.log);
-          break;
-        }
-        case "legion_log": {
-          if (ev.agent && ev.message) _pushLog(ev.agent, ev.message);
-          break;
-        }
-        case "legion_peer_heartbeat": {
-          if (ev.peer_id) {
-            setLegionPeers(prev => ({
-              ...prev,
-              [ev.peer_id]: { ...prev[ev.peer_id], ...ev },
-            }));
+    return client.onAnyEvent((ev: any) => {
+      const ts = new Date().toLocaleTimeString();
+      const evType = (ev as any).event || (ev as any).type || "?";
+
+      /* ── Handle legion roster/status updates ── */
+      if ((evType === "legion_update" || evType === "cluster_update") && (ev as any).roster) {
+        const roster = (ev as any).roster as Record<string, { id: string; name?: string }>;
+        const data = (ev as any).data as Record<string, string> | undefined;
+        setLegionPeers(prev => {
+          const next = { ...prev };
+          for (const [k, v] of Object.entries(roster)) {
+            if (!next[k]) next[k] = v;
           }
-          break;
+          return next;
+        });
+        if (data) setLegionStatus(data);
+        const ver = (ev as any).nanobot_version;
+        if (ver && typeof ver === "string") setNanobotVersion(ver);
+
+        /* Capture tasks from Commander */
+        const tdata = (ev as any).tasks;
+        if (tdata && tdata.tasks?.length > 0) setTaskData(tdata);
+
+        /* Per-agent status lines */
+        if (data) {
+          for (const [agent, status] of Object.entries(data)) {
+            _pushLog(agent, `[${ts}] 状态  ${agent} = ${status}`, 150);
+          }
         }
+        return;  /* legion_update done — no generic line needed */
       }
+
+      /* build detail line */
+      let detail = "";
+      if (typeof (ev as any).text === "string") {
+        detail = (ev as any).text.slice(0, 120);
+      } else if (typeof (ev as any).content === "string") {
+        detail = (ev as any).content.slice(0, 120);
+      } else {
+        try { detail = JSON.stringify(ev).slice(0, 160); } catch (_) { detail = "?"; }
+      }
+
+      const line = `[${ts}] ${evType}  ${detail}`;
+
+      /* route: squad relay events carry sender/target */
+      const sender = (ev as any).sender as string | undefined;
+      const tgt = (ev as any).target as string | undefined;
+
+      _pushLog("all", line, 500);
+      if (sender) _pushLog(sender, line, 150);
+      if (tgt && tgt !== sender) _pushLog(tgt, line, 150);
     });
-    return () => { unsub(); };
   }, [client]);
 
   const collapsed = Boolean(props.collapsed);
