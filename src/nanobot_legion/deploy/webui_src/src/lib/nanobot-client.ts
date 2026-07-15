@@ -453,6 +453,18 @@ export class NanobotClient {
       }
     }
 
+    /* Legion: agent status/roster events carry no chat_id —
+     * dispatch straight to anyEventHandlers so sidebar stays live. */
+    if (
+      parsed.event === "legion_update" ||
+      parsed.event === "cluster_update"
+    ) {
+      for (const h of this.anyEventHandlers) {
+        try { h(parsed); } catch (e) { console.warn("anyEvent handler error:", e); }
+      }
+      return;
+    }
+
     const chatId = (parsed as { chat_id?: string }).chat_id;
     if (chatId) {
       this.recordGoalStatusForRunStrip(chatId, parsed);

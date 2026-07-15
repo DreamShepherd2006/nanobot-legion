@@ -683,7 +683,10 @@ export type InboundEvent =
       scope?: "metadata" | "thread" | string;
       workspace_scope?: WorkspaceScopePayload;
     }
-  | { event: "error"; chat_id?: string; detail?: string; reason?: string };
+  | { event: "error"; chat_id?: string; detail?: string; reason?: string }
+  /* Legion: agent roster/status events */
+  | { event: "legion_update"; type: string; roster?: Record<string, { id: string; name?: string }>; data?: Record<string, string>; nanobot_version?: string; tasks?: Record<string, unknown> }
+  | { event: "cluster_update"; type: string; tasks?: Record<string, unknown> };
 
 /** Base64-encoded image attached to an outbound ``message`` envelope.
  *
