@@ -8,16 +8,6 @@ import {
   Blocks,
 } from "lucide-react";
 
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { useTranslation } from "react-i18next";
 
 import { ChatList } from "@/components/ChatList";
@@ -379,7 +369,6 @@ export function Sidebar(props: SidebarProps) {
   /* ── Legion: console state ── */
   const { client } = useClient();
   const [showConsole, setShowConsole] = useState(false);
-  const [allLogs, setAllLogs] = useState<string[]>([]);
   const [agentLogs, setAgentLogs] = useState<Record<string, string[]>>({});
   const [activeTab, setActiveTab] = useState<string>("all");
   const [legionPeers, setLegionPeers] = useState<Record<string, { id: string; name?: string }>>({});
@@ -413,7 +402,6 @@ export function Sidebar(props: SidebarProps) {
   }, [activeTab, agentLogs]);
 
   const _pushLog = (agent: string, msg: string) => {
-    setAllLogs(prev => [...prev.slice(-199), { agent, msg, ts: Date.now() }]);
     setAgentLogs(prev => {
       const next = { ...prev };
       next[agent] = [...(next[agent] || []), msg].slice(-50);
