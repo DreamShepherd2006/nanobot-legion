@@ -421,13 +421,7 @@ export function Sidebar(props: SidebarProps) {
       if ((evType === "legion_update" || evType === "cluster_update") && (ev as any).roster) {
         const roster = (ev as any).roster as Record<string, { id: string; name?: string }>;
         const data = (ev as any).data as Record<string, string> | undefined;
-        setLegionPeers(prev => {
-          const next = { ...prev };
-          for (const [k, v] of Object.entries(roster)) {
-            if (!next[k]) next[k] = v;
-          }
-          return next;
-        });
+        setLegionPeers(roster);
         if (data) setLegionStatus(data);
         const ver = (ev as any).nanobot_version;
         if (ver && typeof ver === "string") setNanobotVersion(ver);
