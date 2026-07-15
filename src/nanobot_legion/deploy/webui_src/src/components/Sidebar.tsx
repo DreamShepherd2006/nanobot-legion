@@ -1,19 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Archive,
-  ListFilter,
   Menu,
   Search,
   Settings,
   SquarePen,
+  Blocks,
 } from "lucide-react";
-import { useTranslation } from "react-i18next";
-import { useClient } from "@/providers/ClientProvider";
-import { createPortal } from "react-dom";
 
-import { ChatList } from "@/components/ChatList";
-import { ConnectionBadge } from "@/components/ConnectionBadge";
-import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -24,10 +18,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useTranslation } from "react-i18next";
+
+import { ChatList } from "@/components/ChatList";
+import { ConnectionBadge } from "@/components/ConnectionBadge";
+import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { useClient } from "@/providers/ClientProvider";
+import { createPortal } from "react-dom";
 import type {
   ChatSummary,
-  SidebarSortMode,
   SidebarViewState,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -42,12 +42,14 @@ interface SidebarProps {
   onTogglePin: (key: string) => void;
   onRequestRename: (key: string, label: string) => void;
   onToggleArchive: (key: string) => void;
+  onToggleGroup: (groupId: string) => void;
+  onRequestRenameProject: (projectKey: string, label: string) => void;
+  onNewChatInProject: (projectPath: string, projectName: string) => void;
   onOpenSettings: () => void;
+  onOpenApps: () => void;
   onOpenSearch: () => void;
+  activeUtility?: "apps" | null;
   onToggleArchived: () => void;
-  onUpdateView?: (view: Partial<SidebarViewState>) => void;
-  /** Passed by App.tsx (v0.2.1+) — accepted for compatibility. */
-  hostChromeInset?: boolean;
   onCollapse: () => void;
   onExpand?: () => void;
   containActionMenus?: boolean;
@@ -55,11 +57,15 @@ interface SidebarProps {
   pinnedKeys?: string[];
   archivedKeys?: string[];
   titleOverrides?: Record<string, string>;
+  projectNameOverrides?: Record<string, string>;
+  collapsedGroups?: Record<string, boolean>;
   runningChatIds?: string[];
   completedChatIds?: string[];
   viewState?: SidebarViewState;
   showArchived?: boolean;
   archivedCount?: number;
+  defaultWorkspacePath?: string | null;
+  hostChromeInset?: boolean;
 }
 
 
@@ -369,104 +375,80 @@ export function Sidebar(props: SidebarProps) {
   const { t } = useTranslation();
   const [menuPortalContainer, setMenuPortalContainer] =
     useState<HTMLElement | null>(null);
+
   /* ── Legion: console state ── */
   const { client } = useClient();
   const [showConsole, setShowConsole] = useState(false);
   const [allLogs, setAllLogs] = useState<string[]>([]);
   const [agentLogs, setAgentLogs] = useState<Record<string, string[]>>({});
-  const [activeTab, setActiveTab] = useState("all");
+  const [activeTab, setActiveTab] = useState<string>("all");
   const [legionPeers, setLegionPeers] = useState<Record<string, { id: string; name?: string }>>({});
   const [legionStatus, setLegionStatus] = useState<Record<string, string>>({});
-  const [nanobotVersion, setNanobotVersion] = useState<string>("...");
-  const [taskData, setTaskData] = useState<{goal: string; tasks: Array<{id: string; title: string; agent?: string; status: string}>} | null>(null);
+  const [nanobotVersion, setNanobotVersion] = useState<string | undefined>();
+  const [taskData, setTaskData] = useState<any>(null);
 
-  /* derive logs + tabs dynamically */
   const agentIds = Object.keys(legionPeers).sort();
-  const allTabs = ["all", ...agentIds];
-  const logs: Record<string, string[]> = { all: allLogs, ...agentLogs };
-
-  /* ── derive agent action summaries from latest log per agent ── */
   const agentActions = useMemo(() => {
-    const acts: Record<string, string> = {};
-    for (const agent of agentIds) {
-      const lines = agentLogs[agent] || [];
-      if (lines.length === 0) {
-        const st = legionStatus[agent];
-        acts[agent] = st === "executing" ? "工作中" : st === "blocked" ? "阻塞" : st === "online" ? "就绪" : "离线";
-        continue;
-      }
-      const last = lines[lines.length - 1];
-      const match = last.match(/\[[\d:]+\]\s+\S+\s+(.+)/);
-      acts[agent] = match ? match[1].slice(0, 60) : last.slice(0, 60);
+    const m: Record<string, string> = {};
+    for (const id of agentIds) {
+      const st = legionStatus[id] || "offline";
+      const name = legionPeers[id]?.name || id;
+      if (st === "executing") m[id] = `🤔 ${name} 思考中…`;
+      else if (st === "online") m[id] = `✅ ${name} 就绪`;
+      else if (st === "blocked") m[id] = `🚫 ${name} 阻塞`;
+      else m[id] = `⏳ ${name} 离线`;
     }
-    return acts;
-  }, [agentLogs, agentIds, legionStatus]);
+    return m;
+  }, [agentIds, legionPeers, legionStatus]);
 
-  /* ── helper: push line to a named bin ── */
-  function _pushLog(bin: string, line: string, max: number) {
-    setAllLogs(prev => [...prev, line].slice(-500));
-    if (bin !== "all") {
-      setAgentLogs(prev => {
-        const cur = prev[bin] || [];
-        return { ...prev, [bin]: [...cur, line].slice(-max) };
-      });
-    }
-  }
+  const allTabs = useMemo(() => {
+    const tabs = Object.keys(agentLogs).filter(k => (agentLogs[k] || []).length > 0);
+    tabs.sort();
+    return ["all", ...tabs];
+  }, [agentLogs]);
 
-  /* ── Legion: event capture ── */
-  useEffect(() => {
-    return client.onAnyEvent((ev: any) => {
-      const ts = new Date().toLocaleTimeString();
-      const evType = (ev as any).event || (ev as any).type || "?";
+  const logs = useMemo(() => {
+    if (activeTab === "all") return agentLogs;
+    return { [activeTab]: agentLogs[activeTab] || [] };
+  }, [activeTab, agentLogs]);
 
-      /* ── Handle legion roster/status updates ── */
-      if ((evType === "legion_update" || evType === "cluster_update") && (ev as any).roster) {
-        const roster = (ev as any).roster as Record<string, { id: string; name?: string }>;
-        const data = (ev as any).data as Record<string, string> | undefined;
-        setLegionPeers(prev => {
-          const next = { ...prev };
-          for (const [k, v] of Object.entries(roster)) {
-            if (!next[k]) next[k] = v;
-          }
-          return next;
-        });
-        if (data) setLegionStatus(data);
-        const ver = (ev as any).nanobot_version;
-        if (ver && typeof ver === "string") setNanobotVersion(ver);
-
-        /* Capture tasks from Commander */
-        const tdata = (ev as any).tasks;
-        if (tdata && tdata.tasks?.length > 0) setTaskData(tdata as typeof taskData);
-
-        /* Per-agent status lines */
-        if (data) {
-          for (const [agent, status] of Object.entries(data)) {
-            _pushLog(agent, `[${ts}] 状态  ${agent} = ${status}`, 150);
-          }
-        }
-        return;  /* legion_update done — no generic line needed */
-      }
-
-      /* build detail line */
-      let detail = "";
-      if (typeof (ev as any).text === "string") {
-        detail = (ev as any).text.slice(0, 120);
-      } else if (typeof (ev as any).content === "string") {
-        detail = (ev as any).content.slice(0, 120);
-      } else {
-        try { detail = JSON.stringify(ev).slice(0, 160); } catch (_) { detail = "?"; }
-      }
-
-      const line = `[${ts}] ${evType}  ${detail}`;
-
-      /* route: squad relay events carry sender/target */
-      const sender = (ev as any).sender as string | undefined;
-      const tgt = (ev as any).target as string | undefined;
-
-      _pushLog("all", line, 500);
-      if (sender) _pushLog(sender, line, 150);
-      if (tgt && tgt !== sender) _pushLog(tgt, line, 150);
+  const _pushLog = (agent: string, msg: string) => {
+    setAllLogs(prev => [...prev.slice(-199), { agent, msg, ts: Date.now() }]);
+    setAgentLogs(prev => {
+      const next = { ...prev };
+      next[agent] = [...(next[agent] || []), msg].slice(-50);
+      return next;
     });
+  };
+
+  useEffect(() => {
+    if (!client) return;
+    const unsub = client.onAnyEvent((ev: any) => {
+      switch (ev.event) {
+        case "legion_update": {
+          if (ev.peers) setLegionPeers(ev.peers);
+          if (ev.status) setLegionStatus(ev.status);
+          if (ev.version) setNanobotVersion(ev.version);
+          if (ev.tasks) setTaskData(ev.tasks);
+          if (ev.log && ev.agent) _pushLog(ev.agent, ev.log);
+          break;
+        }
+        case "legion_log": {
+          if (ev.agent && ev.message) _pushLog(ev.agent, ev.message);
+          break;
+        }
+        case "legion_peer_heartbeat": {
+          if (ev.peer_id) {
+            setLegionPeers(prev => ({
+              ...prev,
+              [ev.peer_id]: { ...prev[ev.peer_id], ...ev },
+            }));
+          }
+          break;
+        }
+      }
+    });
+    return () => { unsub(); };
   }, [client]);
 
   const collapsed = Boolean(props.collapsed);
@@ -476,11 +458,16 @@ export function Sidebar(props: SidebarProps) {
     <nav
       ref={props.containActionMenus ? setMenuPortalContainer : undefined}
       aria-label={t("sidebar.navigation")}
-      className="flex h-full w-full min-w-0 flex-col border-r border-sidebar-border/60 bg-sidebar text-sidebar-foreground"
+      className={cn(
+        "flex h-full w-full min-w-0 flex-col text-sidebar-foreground",
+        props.hostChromeInset ? "bg-transparent" : "bg-sidebar",
+        !props.hostChromeInset && "border-r border-sidebar-border/60",
+      )}
     >
       <div
         className={cn(
-          "flex items-center px-3 pb-2.5 pt-3",
+          "flex items-center px-3 pb-2.5",
+          props.hostChromeInset ? "pt-[2.85rem]" : "pt-3",
           collapsed ? "w-14 justify-start" : "justify-between",
         )}
       >
@@ -505,7 +492,7 @@ export function Sidebar(props: SidebarProps) {
             draggable={false}
           />
         </button>
-        {!collapsed && (
+        {!collapsed && !props.hostChromeInset && (
           <Button
             variant="ghost"
             size="icon"
@@ -519,6 +506,7 @@ export function Sidebar(props: SidebarProps) {
       </div>
 
       <LegionRoster peers={legionPeers} status={legionStatus} version={nanobotVersion} onToggleConsole={() => setShowConsole(v => !v)} />
+
       <div
         className={cn(
           "space-y-1.5 px-2 pb-2",
@@ -530,6 +518,7 @@ export function Sidebar(props: SidebarProps) {
           label={t("sidebar.newChat")}
           onClick={props.onNewChat}
           icon={<SquarePen className="h-4 w-4" />}
+          shortcut="Cmd/Ctrl+Shift+O"
         />
         <SidebarActionButton
           collapsed={collapsed}
@@ -537,10 +526,12 @@ export function Sidebar(props: SidebarProps) {
           onClick={props.onOpenSearch}
           icon={<Search className="h-4 w-4" />}
         />
-        <SidebarViewMenu
-          compact={collapsed}
-          view={props.viewState}
-          onUpdateView={props.onUpdateView ?? (() => {})}
+        <SidebarActionButton
+          collapsed={collapsed}
+          label={t("sidebar.apps")}
+          onClick={props.onOpenApps}
+          active={props.activeUtility === "apps"}
+          icon={<Blocks className="h-4 w-4" />}
         />
         {props.archivedCount ? (
           <SidebarActionButton
@@ -568,9 +559,14 @@ export function Sidebar(props: SidebarProps) {
             onTogglePin={props.onTogglePin}
             onRequestRename={props.onRequestRename}
             onToggleArchive={props.onToggleArchive}
+            onToggleGroup={props.onToggleGroup}
+            onRequestRenameProject={props.onRequestRenameProject}
+            onNewChatInProject={props.onNewChatInProject}
             pinnedKeys={props.pinnedKeys}
             archivedKeys={props.archivedKeys}
             titleOverrides={props.titleOverrides}
+            projectNameOverrides={props.projectNameOverrides}
+            collapsedGroups={props.collapsedGroups}
             runningChatIds={props.runningChatIds}
             completedChatIds={props.completedChatIds}
             density={props.viewState?.density}
@@ -578,6 +574,7 @@ export function Sidebar(props: SidebarProps) {
             showTimestamps={props.viewState?.show_timestamps}
             sort={props.viewState?.sort}
             showArchived={props.showArchived}
+            defaultWorkspacePath={props.defaultWorkspacePath}
             actionMenuPortalContainer={
               props.containActionMenus ? menuPortalContainer : undefined
             }
@@ -626,27 +623,35 @@ function SidebarActionButton({
   label,
   icon,
   onClick,
+  active = false,
   className,
+  shortcut,
 }: {
   collapsed: boolean;
   label: string;
   icon: ReactNode;
   onClick: () => void;
+  active?: boolean;
   className?: string;
+  shortcut?: string;
 }) {
+  const title = shortcut ? `${label} (${shortcut})` : collapsed ? label : undefined;
+
   return (
     <Button
       type="button"
       variant="ghost"
       aria-label={label}
-      title={collapsed ? label : undefined}
-      onClick={onClick}
+      aria-current={active ? "page" : undefined}
+      title={title}
+      onClick={() => onClick()}
       className={cn(
         "group h-8 min-w-0 gap-2 overflow-hidden rounded-full font-medium text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
         "transition-[width,padding,border-radius,color,background-color] duration-300 ease-out",
         collapsed
           ? "w-9 justify-center gap-0 rounded-xl px-0"
           : "w-full justify-start gap-2 px-3 text-[12.5px]",
+        active && "bg-sidebar-accent text-sidebar-foreground shadow-[inset_0_0_0_1px_hsl(var(--sidebar-border)/0.55)]",
         className,
       )}
     >
@@ -671,105 +676,4 @@ function SidebarActionButton({
       </span>
     </Button>
   );
-}
-
-function SidebarViewMenu({
-  compact = false,
-  view,
-  onUpdateView,
-}: {
-  compact?: boolean;
-  view?: SidebarViewState;
-  onUpdateView?: (view: Partial<SidebarViewState>) => void;
-  /** Passed by App.tsx (v0.2.1+) — accepted for compatibility. */
-  hostChromeInset?: boolean;
-}) {
-  const { t } = useTranslation();
-  const sort = view?.sort ?? "updated_desc";
-  const setSort = (value: string) => {
-    if (isSidebarSortMode(value)) onUpdateView?.({ sort: value });
-  };
-
-  return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          aria-label={t("sidebar.viewOptions")}
-          title={compact ? t("sidebar.viewOptions") : undefined}
-          className={cn(
-            "h-8 min-w-0 overflow-hidden font-medium text-sidebar-foreground/75 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
-            "transition-[width,padding,border-radius,color,background-color] duration-300 ease-out",
-            compact
-              ? "w-9 justify-center gap-0 rounded-xl px-0"
-              : "w-full justify-start gap-2 rounded-full px-3 text-[12.5px]",
-          )}
-          variant="ghost"
-        >
-          <ListFilter className="h-4 w-4 shrink-0" aria-hidden />
-          <span
-            className={cn(
-              "min-w-0 overflow-hidden truncate whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out",
-              compact
-                ? "max-w-0 -translate-x-1 opacity-0"
-                : "max-w-[12rem] translate-x-0 opacity-100",
-            )}
-          >
-            {t("sidebar.viewOptions")}
-          </span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-52">
-        <DropdownMenuLabel className="text-xs text-muted-foreground">
-          {t("sidebar.viewOptions")}
-        </DropdownMenuLabel>
-        <DropdownMenuCheckboxItem
-          checked={view?.density === "compact"}
-          onCheckedChange={(checked) =>
-            onUpdateView({ density: checked ? "compact" : "comfortable" })
-          }
-          onSelect={(event) => event.preventDefault()}
-        >
-          {t("sidebar.compactList")}
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem
-          checked={Boolean(view?.show_previews)}
-          onCheckedChange={(checked) =>
-            onUpdateView({ show_previews: Boolean(checked) })
-          }
-          onSelect={(event) => event.preventDefault()}
-        >
-          {t("sidebar.showPreviews")}
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem
-          checked={Boolean(view?.show_timestamps)}
-          onCheckedChange={(checked) =>
-            onUpdateView({ show_timestamps: Boolean(checked) })
-          }
-          onSelect={(event) => event.preventDefault()}
-        >
-          {t("sidebar.showTimestamps")}
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-xs text-muted-foreground">
-          {t("sidebar.sortLabel")}
-        </DropdownMenuLabel>
-        <DropdownMenuRadioGroup value={sort} onValueChange={setSort}>
-          <DropdownMenuRadioItem value="updated_desc">
-            {t("sidebar.sortUpdated")}
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="created_desc">
-            {t("sidebar.sortCreated")}
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="title_asc">
-            {t("sidebar.sortTitle")}
-          </DropdownMenuRadioItem>
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-function isSidebarSortMode(value: string): value is SidebarSortMode {
-  return value === "updated_desc" || value === "created_desc" || value === "title_asc";
 }

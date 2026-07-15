@@ -201,8 +201,6 @@ export interface BootstrapResponse {
   ws_url?: string | null;
   expires_in: number;
   model_name?: string | null;
-  /** Legion: squad peer roster — keyed by agent name. */
-  peers?: Record<string, { id: string; name: string; gateway_port: number; ws_port: number }>;
   runtime_surface?: RuntimeSurface;
   runtime_capabilities?: RuntimeCapabilities;
 }

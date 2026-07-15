@@ -433,6 +433,72 @@ describe("AgentActivityCluster", () => {
     }
   });
 
+  it("labels whole-file deletes as deleted instead of edited", () => {
+    render(
+      <AgentActivityCluster
+        messages={activityMessages("", {
+          id: "t-delete",
+          role: "tool",
+          kind: "trace",
+          content: "apply_patch()",
+          traces: ["apply_patch()"],
+          fileEdits: [{
+            call_id: "call-delete",
+            tool: "apply_patch",
+            path: "angry-birds.html",
+            phase: "end",
+            added: 0,
+            deleted: 590,
+            approximate: false,
+            status: "done",
+            operation: "delete",
+          }],
+          createdAt: 3,
+        })}
+        isTurnStreaming={false}
+        hasBodyBelow={false}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /deleted angry-birds\.html/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /edited angry-birds\.html/i })).not.toBeInTheDocument();
+  });
+
+  it("renders file-only edits without a redundant disclosure", () => {
+    render(
+      <AgentActivityCluster
+        messages={[{
+          id: "t-file-only",
+          role: "tool",
+          kind: "trace",
+          content: "apply_patch()",
+          traces: ["apply_patch()"],
+          fileEdits: [{
+            call_id: "call-patch",
+            tool: "apply_patch",
+            path: "src/app.tsx",
+            absolute_path: "/Users/renxubin/project/src/app.tsx",
+            phase: "end",
+            added: 12,
+            deleted: 3,
+            approximate: false,
+            status: "done",
+          }],
+          createdAt: 3,
+        }]}
+        isTurnStreaming={false}
+        hasBodyBelow={false}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /edited app\.tsx/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("agent-activity-scroll")).not.toBeInTheDocument();
+    expect(screen.getByText("Edited")).toBeInTheDocument();
+    expect(screen.getByTestId("activity-header-file-reference")).toHaveTextContent("app.tsx");
+    expect(screen.getByText("+12")).toBeInTheDocument();
+    expect(screen.getByText("-3")).toBeInTheDocument();
+  });
+
   it("renders CLI app runs as dedicated activity rows", () => {
     const line = 'run_cli_app({"name":"blender","args":["--background","scene.blend"],"json":true})';
     render(
@@ -670,7 +736,7 @@ describe("AgentActivityCluster", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /1 tool calls/i }));
 
-    expect(screen.getByText("Shell")).toBeInTheDocument();
+    expect(screen.getByText("Command")).toBeInTheDocument();
     expect(screen.getByText(/cat << 'EOF' \| bash · script, 6 lines/)).toBeInTheDocument();
     expect(screen.queryByText(/SECRET_TOKEN/)).not.toBeInTheDocument();
     expect(screen.queryByText(/for id in/)).not.toBeInTheDocument();
@@ -771,6 +837,71 @@ describe("AgentActivityCluster", () => {
     expect(screen.getByText("Preparing file edit…")).toBeInTheDocument();
   });
 
+  it("shows the reason when a file edit fails", () => {
+    render(
+      <AgentActivityCluster
+        messages={activityMessages("", {
+          id: "t2",
+          role: "tool",
+          kind: "trace",
+          content: "apply_patch()",
+          traces: ["apply_patch()"],
+          fileEdits: [{
+            call_id: "call-patch",
+            tool: "apply_patch",
+            path: "angry-birds.html",
+            phase: "error",
+            added: 0,
+            deleted: 0,
+            approximate: false,
+            status: "error",
+            error: "Error applying patch: old_text not found in angry-birds.html",
+          }],
+          createdAt: 3,
+        })}
+        isTurnStreaming={false}
+        hasBodyBelow={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /failed angry-birds\.html/i }));
+
+    expect(screen.getByText("Target text was not found in angry-birds.html.")).toBeInTheDocument();
+  });
+
+  it("keeps permission errors readable for failed file edits", () => {
+    render(
+      <AgentActivityCluster
+        messages={activityMessages("", {
+          id: "t2",
+          role: "tool",
+          kind: "trace",
+          content: "write_file()",
+          traces: ["write_file()"],
+          fileEdits: [{
+            call_id: "call-write",
+            tool: "write_file",
+            path: "/Users/renxubin/.nanobot/workspace/agent-research-video/composition.html",
+            phase: "error",
+            added: 0,
+            deleted: 0,
+            approximate: false,
+            status: "error",
+            error: "Error writing file: [Errno 13] Permission denied: '/Users/renxubin'",
+          }],
+          createdAt: 3,
+        })}
+        isTurnStreaming={false}
+        hasBodyBelow={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /failed composition\.html/i }));
+
+    expect(screen.getByText("No permission to change this location.")).toBeInTheDocument();
+    expect(screen.queryByText(/\[Errno 13\]/)).not.toBeInTheDocument();
+  });
+
   it("merges repeated edits for the same path and lets successful edits win over failures", async () => {
     const restoreMotion = installReducedMotion();
     try {
@@ -837,5 +968,68 @@ describe("AgentActivityCluster", () => {
     } finally {
       restoreMotion();
     }
+  });
+
+  it("renders tool event embeds as inline activity evidence", () => {
+    render(
+      <AgentActivityCluster
+        messages={[{
+          id: "t-evidence",
+          role: "tool",
+          kind: "trace",
+          content: 'web_fetch({"url":"https://example.com"})',
+          traces: ['web_fetch({"url":"https://example.com"})'],
+          toolEvents: [{
+            phase: "end",
+            call_id: "call-fetch",
+            name: "web_fetch",
+            arguments: { url: "https://example.com" },
+            embeds: [{
+              url: "/api/media/signed/screenshot.png",
+              name: "Homepage screenshot",
+              type: "image/png",
+            }],
+          }],
+          createdAt: 1,
+        }]}
+        isTurnStreaming
+        hasBodyBelow={false}
+      />,
+    );
+
+    expect(screen.getByText("Web")).toBeInTheDocument();
+    expect(screen.getByTestId("activity-evidence-preview")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Homepage screenshot" })).toHaveAttribute(
+      "src",
+      "/api/media/signed/screenshot.png",
+    );
+  });
+
+  it("shows missing evidence as a file-safe placeholder", () => {
+    render(
+      <AgentActivityCluster
+        messages={[{
+          id: "t-missing-evidence",
+          role: "tool",
+          kind: "trace",
+          content: 'screenshot({"path":"missing.png"})',
+          traces: ['screenshot({"path":"missing.png"})'],
+          toolEvents: [{
+            phase: "end",
+            call_id: "call-shot",
+            name: "screenshot",
+            arguments: { path: "missing.png" },
+            files: [{ name: "missing.png", type: "image/png" }],
+          }],
+          createdAt: 1,
+        }]}
+        isTurnStreaming
+        hasBodyBelow={false}
+      />,
+    );
+
+    expect(screen.getByText("Vision")).toBeInTheDocument();
+    expect(screen.getByTestId("activity-evidence-preview")).toBeInTheDocument();
+    expect(screen.getByText("missing.png")).toBeInTheDocument();
   });
 });

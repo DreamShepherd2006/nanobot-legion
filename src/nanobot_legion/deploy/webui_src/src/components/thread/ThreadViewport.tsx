@@ -10,6 +10,7 @@ import {
 import { ArrowDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { PromptRail } from "@/components/thread/PromptRail";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { isAgentActivityMember } from "@/components/thread/AgentActivityCluster";
 import { Button } from "@/components/ui/button";
@@ -237,7 +238,7 @@ export function ThreadViewport({
       <div
         ref={scrollRef}
         className={cn(
-          "absolute inset-0 overflow-y-auto scroll-auto scrollbar-thin",
+          "thread-viewport-scrollbar absolute inset-0 overflow-y-auto scroll-auto scrollbar-thin",
           "[&::-webkit-scrollbar]:w-1.5",
           "[&::-webkit-scrollbar-thumb]:rounded-full",
           "[&::-webkit-scrollbar-thumb]:bg-muted-foreground/30",
@@ -271,9 +272,11 @@ export function ThreadViewport({
           </div>
         ) : (
           <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[72rem] flex-col px-4">
-            <div className="flex w-full flex-1 items-center justify-center pb-[7vh] pt-8">
-              <div className="flex w-full max-w-[58rem] flex-col gap-6">
-                {emptyState}
+            <div className="flex w-full flex-1 items-center justify-center py-10 sm:py-12">
+              <div className="relative w-full max-w-[58rem]">
+                <div className="absolute inset-x-0 bottom-[calc(100%+1.5rem)] flex justify-center">
+                  {emptyState}
+                </div>
                 <div className="w-full">{composer}</div>
               </div>
             </div>
@@ -286,6 +289,14 @@ export function ThreadViewport({
         aria-hidden
         className="pointer-events-none absolute inset-x-0 top-0 h-6 bg-gradient-to-b from-background to-transparent"
       />
+
+      {hasMessages ? (
+        <PromptRail
+          messages={visibleMessages}
+          scrollRef={scrollRef}
+          bottomOffset={scrollButtonBottom}
+        />
+      ) : null}
 
       {showScrollToBottomButton && !atBottom && (
         <Button

@@ -4,6 +4,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import type { CliAppInfo, McpPresetInfo, SlashCommand } from "@/lib/types";
 
+vi.mock("@/lib/imageEncode", () => ({
+  encodeImage: vi.fn(async (file: File) => ({
+    ok: true,
+    dataUrl: `data:${file.type || "image/png"};base64,aW1hZ2U=`,
+    bytes: Math.max(1, file.size),
+    normalized: false,
+  })),
+}));
+
 const COMMANDS: SlashCommand[] = [
   {
     command: "/stop",
@@ -98,7 +107,7 @@ const MCP_PRESETS: McpPresetInfo[] = [
     description: "Design context",
     docs_url: "https://figma.com",
     transport: "streamableHttp",
-    requires: "Figma desktop",
+    requires: "Figma local app",
     note: "",
     install_supported: true,
     installed: true,
@@ -113,8 +122,20 @@ const MCP_PRESETS: McpPresetInfo[] = [
 ];
 const ORIGINAL_INNER_HEIGHT = window.innerHeight;
 
+function mockBlobUrls() {
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: vi.fn(() => "blob:composer-test"),
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: vi.fn(),
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
+  Reflect.deleteProperty(window, "nanobotHost");
   window.localStorage.clear();
   Object.defineProperty(window, "innerHeight", {
     value: ORIGINAL_INNER_HEIGHT,
@@ -159,6 +180,9 @@ describe("ThreadComposer", () => {
     const input = screen.getByPlaceholderText("Ask anything...");
     expect(input).toBeInTheDocument();
     expect(input.className).toContain("min-h-[78px]");
+    expect(input.className).toContain("pt-[27px]");
+    fireEvent.change(input, { target: { value: "1" } });
+    expect(input.className).toContain("pt-[27px]");
     expect(input.parentElement?.parentElement?.className).toContain("max-w-[58rem]");
   });
 
@@ -182,6 +206,167 @@ describe("ThreadComposer", () => {
     expect(input.parentElement?.parentElement?.className).toContain("shadow-[0_12px_30px_rgba(15,23,42,0.07)]");
     expect(screen.getByRole("button", { name: "Attach image" }).className).toContain("bg-card");
     expect(screen.getByRole("button", { name: "Send message" }).className).toContain("bg-foreground");
+    expect(screen.queryByText(/Enter to send/)).not.toBeInTheDocument();
+  });
+
+  it("renders and changes workspace access mode", async () => {
+    const onWorkspaceScopeChange = vi.fn();
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        placeholder="Type your message..."
+        workspaceScope={{
+          project_path: "/tmp/project",
+          project_name: "project",
+          access_mode: "restricted",
+          restrict_to_workspace: true,
+        }}
+        workspaceControls={{ can_change_project: true, can_use_full_access: true }}
+        onWorkspaceScopeChange={onWorkspaceScopeChange}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Workspace access mode" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Full Access/ }));
+
+    expect(onWorkspaceScopeChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project_path: "/tmp/project",
+        access_mode: "full",
+        restrict_to_workspace: false,
+      }),
+    );
+  });
+
+  it("keeps project selection as a compact composer dropdown", async () => {
+    const onWorkspaceScopeChange = vi.fn();
+    const defaultScope = {
+      project_path: "/Users/test/.nanobot/workspace",
+      project_name: "workspace",
+      access_mode: "restricted" as const,
+      restrict_to_workspace: true,
+    };
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        placeholder="Ask anything..."
+        variant="hero"
+        workspaceScope={{
+          ...defaultScope,
+          access_mode: "full",
+          restrict_to_workspace: false,
+        }}
+        workspaceDefaultScope={defaultScope}
+        workspaceControls={{ can_change_project: true, can_use_full_access: true }}
+        onWorkspaceScopeChange={onWorkspaceScopeChange}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Choose project" }));
+
+    expect(await screen.findByRole("menuitem", { name: /Default workspace/ })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    const input = screen.getByLabelText("Paste path");
+    fireEvent.change(input, { target: { value: "relative/project" } });
+    fireEvent.click(screen.getByRole("button", { name: "Use Path" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Enter an absolute folder path on this machine.",
+    );
+    expect(onWorkspaceScopeChange).not.toHaveBeenCalled();
+
+    fireEvent.change(input, { target: { value: "/Users/test/project-alpha" } });
+    fireEvent.click(screen.getByRole("button", { name: "Use Path" }));
+
+    expect(onWorkspaceScopeChange).toHaveBeenCalledWith(expect.objectContaining({
+      project_path: "/Users/test/project-alpha",
+      project_name: "project-alpha",
+      access_mode: "full",
+      restrict_to_workspace: false,
+    }));
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Choose project" }));
+    const reopenedInput = await screen.findByLabelText("Paste path");
+    fireEvent.change(reopenedInput, { target: { value: "~/Pictures/Photos" } });
+    fireEvent.click(screen.getByRole("button", { name: "Use Path" }));
+
+    expect(onWorkspaceScopeChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      project_path: "~/Pictures/Photos",
+      project_name: "Photos",
+      access_mode: "full",
+      restrict_to_workspace: false,
+    }));
+  });
+
+  it("uses the native folder picker for project selection on native host", async () => {
+    const onWorkspaceScopeChange = vi.fn();
+    const pickFolder = vi.fn().mockResolvedValue("/Users/test/native-project");
+    const defaultScope = {
+      project_path: "/Users/test/.nanobot/workspace",
+      project_name: "workspace",
+      access_mode: "full" as const,
+      restrict_to_workspace: false,
+    };
+    Object.defineProperty(window, "nanobotHost", {
+      configurable: true,
+      value: {
+        getRuntimeInfo: vi.fn(),
+        restartEngine: vi.fn(),
+        pickFolder,
+        openLogs: vi.fn(),
+        exportDiagnostics: vi.fn(),
+      },
+    });
+
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        placeholder="Ask anything..."
+        variant="hero"
+        workspaceScope={defaultScope}
+        workspaceDefaultScope={defaultScope}
+        workspaceControls={{ can_change_project: true, can_use_full_access: true }}
+        onWorkspaceScopeChange={onWorkspaceScopeChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose project" }));
+
+    await waitFor(() => expect(pickFolder).toHaveBeenCalled());
+    expect(screen.queryByRole("menuitem", { name: /Default workspace/ })).not.toBeInTheDocument();
+    expect(onWorkspaceScopeChange).toHaveBeenCalledWith(expect.objectContaining({
+      project_path: "/Users/test/native-project",
+      project_name: "native-project",
+      access_mode: "full",
+      restrict_to_workspace: false,
+    }));
+  });
+
+  it("uses the web path menu when no native host picker is available", async () => {
+    const defaultScope = {
+      project_path: "/Users/test/.nanobot/workspace",
+      project_name: "workspace",
+      access_mode: "full" as const,
+      restrict_to_workspace: false,
+    };
+
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        placeholder="Ask anything..."
+        variant="hero"
+        workspaceScope={defaultScope}
+        workspaceDefaultScope={defaultScope}
+        workspaceControls={{ can_change_project: true, can_use_full_access: true }}
+        onWorkspaceScopeChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Choose project" }));
+
+    expect(await screen.findByRole("menuitem", { name: /Default workspace/ })).toBeInTheDocument();
+    expect(screen.getByLabelText("Paste path")).toBeInTheDocument();
   });
 
   it("shows turn run timer when runStartedAt is set", () => {
@@ -199,6 +384,9 @@ describe("ThreadComposer", () => {
     const status = screen.getByRole("status");
     expect(status).toHaveTextContent(/Running/);
     expect(status).toHaveTextContent(/2:05/);
+    expect(status.parentElement).toHaveClass("composer-status-strip");
+    expect(status.parentElement).toHaveAttribute("data-state", "enter");
+    expect(status.querySelector(".run-pulse-icon")).not.toBeNull();
 
     vi.useRealTimers();
   });
@@ -242,12 +430,7 @@ describe("ThreadComposer", () => {
     const palette = screen.getByRole("listbox", { name: "Slash commands" });
     expect(palette).toBeInTheDocument();
     expect(palette).toHaveStyle({ maxHeight: "288px" });
-    expect(screen.getByRole("option", { name: /\/stop/i })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
-
-    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(screen.queryByRole("option", { name: /\/stop/i })).not.toBeInTheDocument();
     expect(screen.getByRole("option", { name: /\/history/i })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -310,6 +493,7 @@ describe("ThreadComposer", () => {
 
     expect(onStop).toHaveBeenCalledTimes(1);
     expect(input).toHaveValue("");
+    expect(window.localStorage.getItem("nanobot.webui.slashCommandRecents")).toBeNull();
   });
 
   it("orders recent slash commands first for the blank slash menu", () => {
@@ -333,6 +517,42 @@ describe("ThreadComposer", () => {
     expect(screen.getByText("Recent")).toBeInTheDocument();
   });
 
+  it("keeps keyboard-selected slash options visible while navigating", () => {
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+
+    try {
+      render(
+        <ThreadComposer
+          onSend={vi.fn()}
+          placeholder="Type your message..."
+          slashCommands={Array.from({ length: 8 }, (_, index) => ({
+            command: `/cmd-${index}`,
+            title: `Command ${index}`,
+            description: `Description ${index}`,
+            icon: "activity",
+          }))}
+        />,
+      );
+
+      const input = screen.getByLabelText("Message input");
+      fireEvent.change(input, { target: { value: "/" } });
+      scrollIntoView.mockClear();
+
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+
+      expect(screen.getByRole("option", { name: /\/cmd-2/i })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest" });
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
   it("opens the CLI app mention palette and inserts the selected app", () => {
     const onSend = vi.fn();
     render(
@@ -346,7 +566,7 @@ describe("ThreadComposer", () => {
     const input = screen.getByLabelText("Message input");
     fireEvent.change(input, { target: { value: "@", selectionStart: 1 } });
 
-    const palette = screen.getByRole("listbox", { name: "Apps and MCP" });
+    const palette = screen.getByRole("listbox", { name: "Apps" });
     expect(palette).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /@gimp/i })).toHaveAttribute(
       "aria-selected",
@@ -365,7 +585,7 @@ describe("ThreadComposer", () => {
     expect(screen.getByTestId("composer-cli-mention-blender")).toHaveTextContent("@blender");
     expect(screen.queryByTestId("composer-cli-app-tray")).not.toBeInTheDocument();
     expect(onSend).not.toHaveBeenCalled();
-    expect(screen.queryByRole("listbox", { name: "Apps and MCP" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("listbox", { name: "Apps" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
 
@@ -379,6 +599,52 @@ describe("ThreadComposer", () => {
         brand_color: "#E87D0D",
       }],
     });
+  });
+
+  it("keeps keyboard-selected mention options visible while navigating", () => {
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+
+    try {
+      render(
+        <ThreadComposer
+          onSend={vi.fn()}
+          placeholder="Type your message..."
+          cliApps={Array.from({ length: 8 }, (_, index) => ({
+            name: `app-${index}`,
+            display_name: `App ${index}`,
+            category: "test",
+            description: "Test app",
+            requires: "",
+            source: "harness",
+            entry_point: `app-${index}`,
+            install_supported: true,
+            installed: true,
+            available: true,
+            status: "installed",
+            logo_url: null,
+            brand_color: "#111827",
+            skill_installed: true,
+          }))}
+        />,
+      );
+
+      const input = screen.getByLabelText("Message input");
+      fireEvent.change(input, { target: { value: "@", selectionStart: 1 } });
+      scrollIntoView.mockClear();
+
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+
+      expect(screen.getByRole("option", { name: /@app-2/i })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest" });
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    }
   });
 
   it("completes a CLI app mention with Tab and adds exactly one trailing space", () => {
@@ -562,7 +828,7 @@ describe("ThreadComposer", () => {
     expect(screen.queryByRole("listbox", { name: "Slash commands" })).not.toBeInTheDocument();
   });
 
-  it("sends image generation mode with automatic aspect ratio", () => {
+  it("keeps image generation mode out of the composer chrome", () => {
     const onSend = vi.fn();
     render(
       <ThreadComposer
@@ -571,18 +837,14 @@ describe("ThreadComposer", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Toggle image generation mode" }));
-    expect(screen.getByPlaceholderText("Describe or edit an image…")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Toggle image generation mode" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Image aspect ratio" })).not.toBeInTheDocument();
 
     const input = screen.getByLabelText("Message input");
     fireEvent.change(input, { target: { value: "Draw a friendly robot" } });
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
 
-    expect(onSend).toHaveBeenCalledWith(
-      "Draw a friendly robot",
-      undefined,
-      { imageGeneration: { enabled: true, aspect_ratio: null } },
-    );
+    expect(onSend).toHaveBeenCalledWith("Draw a friendly robot", undefined, undefined);
   });
 
   it("shows a stop button while streaming", () => {
@@ -602,75 +864,407 @@ describe("ThreadComposer", () => {
     expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
   });
 
-  it("lets users select a concrete image aspect ratio", () => {
+  it("queues plain guidance while a task is running", () => {
     const onSend = vi.fn();
     render(
       <ThreadComposer
         onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming
         placeholder="Type your message..."
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Toggle image generation mode" }));
-    fireEvent.click(screen.getByRole("button", { name: "Image aspect ratio" }));
-    expect(screen.getByRole("listbox", { name: "Image aspect ratio" }).className).toContain(
-      "bottom-full",
-    );
-    fireEvent.mouseDown(screen.getByRole("option", { name: "Wide 16:9" }));
-
     const input = screen.getByLabelText("Message input");
-    fireEvent.change(input, { target: { value: "Draw a banner" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    fireEvent.change(input, { target: { value: "keep the UI minimal" } });
+    fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(onSend).toHaveBeenCalledWith(
-      "Draw a banner",
-      undefined,
-      { imageGeneration: { enabled: true, aspect_ratio: "16:9" } },
-    );
+    expect(onSend).not.toHaveBeenCalled();
+    expect(input).toHaveValue("");
+    expect(screen.getByText("keep the UI minimal")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Guide" }));
+
+    expect(onSend).toHaveBeenCalledWith("keep the UI minimal");
+    expect(screen.queryByText("keep the UI minimal")).not.toBeInTheDocument();
   });
 
-  it("opens the hero image aspect menu downward", () => {
-    render(
+  it("keeps queued guidance attached to the composer and sends it one item at a time", async () => {
+    const onSend = vi.fn();
+    const { rerender } = render(
       <ThreadComposer
-        onSend={vi.fn()}
-        placeholder="Ask anything..."
-        variant="hero"
-        imageMode
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming
+        placeholder="Type your message..."
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Image aspect ratio" }));
+    const input = screen.getByLabelText("Message input");
+    fireEvent.change(input, { target: { value: "first follow-up" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.change(input, { target: { value: "second follow-up" } });
+    fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(screen.getByRole("listbox", { name: "Image aspect ratio" }).className).toContain(
-      "top-full",
+    const queue = screen.getByRole("group", { name: "Queued guidance" });
+    expect(queue).toHaveClass("composer-status-strip");
+    expect(queue).toHaveClass("mx-3");
+    expect(queue.parentElement?.className).toContain("group/composer");
+    expect(within(queue).getByText("first follow-up")).toBeInTheDocument();
+    expect(within(queue).getByText("second follow-up")).toBeInTheDocument();
+    expect(within(queue).getAllByRole("button", { name: "Edit guidance" })).toHaveLength(2);
+    expect(within(queue).getAllByRole("button", { name: "Guide" })).toHaveLength(2);
+
+    rerender(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming={false}
+        placeholder="Type your message..."
+      />,
     );
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("first follow-up");
+    });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("first follow-up")).not.toBeInTheDocument();
+    expect(screen.getByText("second follow-up")).toBeInTheDocument();
+
+    rerender(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming
+        placeholder="Type your message..."
+      />,
+    );
+    rerender(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming={false}
+        placeholder="Type your message..."
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenLastCalledWith("second follow-up");
+    });
+    expect(onSend).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("group", { name: "Queued guidance" })).not.toBeInTheDocument();
   });
 
-  it("dismisses the image aspect menu on outside click, escape, and wheel", () => {
+  it("lets users edit queued guidance before it is sent", async () => {
+    const onSend = vi.fn();
+    const { rerender } = render(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming
+        placeholder="Type your message..."
+      />,
+    );
+
+    const input = screen.getByLabelText("Message input");
+    fireEvent.change(input, { target: { value: "rough follow-up" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    const editButton = screen.getByRole("button", { name: "Edit guidance" });
+    fireEvent.click(editButton);
+    await waitFor(() => {
+      expect(input).toHaveFocus();
+    });
+    expect(input).toHaveValue("rough follow-up");
+    expect(screen.queryByRole("group", { name: "Queued guidance" })).not.toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "polished follow-up" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    rerender(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming={false}
+        placeholder="Type your message..."
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("polished follow-up");
+    });
+  });
+
+  it("requeues edited guidance at the end of the pending list", async () => {
+    const onSend = vi.fn();
+    const { rerender } = render(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming
+        placeholder="Type your message..."
+      />,
+    );
+
+    const input = screen.getByLabelText("Message input");
+    fireEvent.change(input, { target: { value: "first follow-up" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.change(input, { target: { value: "second follow-up" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit guidance" })[0]);
+    await waitFor(() => {
+      expect(input).toHaveValue("first follow-up");
+    });
+    fireEvent.change(input, { target: { value: "first follow-up edited" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    rerender(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming={false}
+        placeholder="Type your message..."
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("second follow-up");
+    });
+    expect(onSend).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming
+        placeholder="Type your message..."
+      />,
+    );
+    rerender(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming={false}
+        placeholder="Type your message..."
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenLastCalledWith("first follow-up edited");
+    });
+    expect(onSend).toHaveBeenCalledTimes(2);
+  });
+
+  it("queues image guidance while running and restores it for editing", async () => {
+    mockBlobUrls();
+    const onSend = vi.fn();
+    const { container, rerender } = render(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming
+        placeholder="Type your message..."
+      />,
+    );
+
+    const input = screen.getByLabelText("Message input");
+    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInput).toBeTruthy();
+    const file = new File(["image"], "draft.png", { type: "image/png" });
+    fireEvent.change(fileInput!, { target: { files: [file] } });
+    await screen.findByText("draft.png");
+
+    fireEvent.change(input, { target: { value: "look at this" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(screen.getByRole("group", { name: "Queued guidance" })).toBeInTheDocument();
+    expect(screen.getByText("look at this")).toBeInTheDocument();
+    expect(screen.queryByTestId("composer-chip")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit guidance" }));
+    expect(input).toHaveValue("look at this");
+    expect(screen.getByTestId("composer-chip")).toHaveTextContent("draft.png");
+    expect(screen.queryByRole("group", { name: "Queued guidance" })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    rerender(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming={false}
+        placeholder="Type your message..."
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith(
+        "look at this",
+        [expect.objectContaining({
+          media: expect.objectContaining({
+            data_url: "data:image/png;base64,aW1hZ2U=",
+            name: "draft.png",
+          }),
+        })],
+      );
+    });
+  });
+
+  it("reorders queued guidance while dragging over another row", async () => {
+    const onSend = vi.fn();
+    const { rerender } = render(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming
+        placeholder="Type your message..."
+      />,
+    );
+
+    const input = screen.getByLabelText("Message input");
+    fireEvent.change(input, { target: { value: "first follow-up" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.change(input, { target: { value: "second follow-up" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    const handles = screen.getAllByLabelText("Drag to reorder");
+    const secondRow = screen
+      .getByText("second follow-up")
+      .closest("[data-queued-prompt-row='true']");
+    expect(secondRow).toBeTruthy();
+
+    const dataTransfer = {
+      effectAllowed: "",
+      dropEffect: "",
+      setData: vi.fn(),
+      getData: vi.fn(),
+    };
+    fireEvent.dragStart(handles[0], { dataTransfer });
+    fireEvent.dragEnter(secondRow!, { dataTransfer });
+    fireEvent.dragEnd(handles[0], { dataTransfer });
+
+    rerender(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming={false}
+        placeholder="Type your message..."
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("second follow-up");
+    });
+  });
+
+  it("moves later queued guidance before an earlier item while dragging", async () => {
+    const onSend = vi.fn();
+    const { rerender } = render(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming
+        placeholder="Type your message..."
+      />,
+    );
+
+    const input = screen.getByLabelText("Message input");
+    fireEvent.change(input, { target: { value: "first follow-up" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.change(input, { target: { value: "second follow-up" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    const handles = screen.getAllByLabelText("Drag to reorder");
+    const firstRow = screen
+      .getByText("first follow-up")
+      .closest("[data-queued-prompt-row='true']");
+    expect(firstRow).toBeTruthy();
+
+    const dataTransfer = {
+      effectAllowed: "",
+      dropEffect: "",
+      setData: vi.fn(),
+      getData: vi.fn(),
+    };
+    fireEvent.dragStart(handles[1], { dataTransfer });
+    fireEvent.dragEnter(firstRow!, { dataTransfer });
+    fireEvent.dragEnd(handles[1], { dataTransfer });
+
+    rerender(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming={false}
+        placeholder="Type your message..."
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("second follow-up");
+    });
+  });
+
+  it("persists queued guidance per chat across remounts", async () => {
+    const onSend = vi.fn();
+    const { rerender, unmount } = render(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming
+        pendingQueueKey="chat-a"
+        placeholder="Type your message..."
+      />,
+    );
+
+    const input = screen.getByLabelText("Message input");
+    fireEvent.change(input, { target: { value: "remember this follow-up" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit guidance" }));
+    fireEvent.change(input, { target: { value: "remember this edited follow-up" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.getByText("remember this edited follow-up")).toBeInTheDocument();
+
+    rerender(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming
+        pendingQueueKey="chat-b"
+        placeholder="Type your message..."
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.queryByText("remember this edited follow-up")).not.toBeInTheDocument();
+    });
+
+    unmount();
+    const remount = render(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming
+        pendingQueueKey="chat-a"
+        placeholder="Type your message..."
+      />,
+    );
+
+    expect(await screen.findByText("remember this edited follow-up")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Guide" }));
+    expect(onSend).toHaveBeenCalledWith("remember this edited follow-up");
+
+    remount.unmount();
     render(
-      <div>
-        <button type="button">outside</button>
-        <ThreadComposer
-          onSend={vi.fn()}
-          placeholder="Type your message..."
-          imageMode
-        />
-      </div>,
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming
+        pendingQueueKey="chat-a"
+        placeholder="Type your message..."
+      />,
     );
-
-    const aspectButton = screen.getByRole("button", { name: "Image aspect ratio" });
-    fireEvent.click(aspectButton);
-    expect(screen.getByRole("listbox", { name: "Image aspect ratio" })).toBeInTheDocument();
-
-    fireEvent.pointerDown(screen.getByRole("button", { name: "outside" }));
-    expect(screen.queryByRole("listbox", { name: "Image aspect ratio" })).not.toBeInTheDocument();
-
-    fireEvent.click(aspectButton);
-    fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("listbox", { name: "Image aspect ratio" })).not.toBeInTheDocument();
-
-    fireEvent.click(aspectButton);
-    fireEvent.wheel(screen.getByRole("listbox", { name: "Image aspect ratio" }), { deltaY: 120 });
-    expect(screen.queryByRole("listbox", { name: "Image aspect ratio" })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByText("remember this edited follow-up")).not.toBeInTheDocument();
+    });
   });
+
 });

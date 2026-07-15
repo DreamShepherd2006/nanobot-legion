@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  forwardRef,
   useMemo,
   useState,
   type Dispatch,
@@ -26,12 +27,10 @@ import {
   HardDrive,
   Hexagon,
   ImageIcon,
-  Info,
   Layers,
   Loader2,
   LogOut,
   Moon,
-  Package,
   PlayCircle,
   Plus,
   Orbit,
@@ -46,6 +45,7 @@ import {
   Trash2,
   Triangle,
   Waves,
+  X,
   Zap,
   type LucideIcon,
 } from "lucide-react";
@@ -57,6 +57,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -74,17 +75,23 @@ import {
   fetchSettings,
   fetchCliApps,
   fetchMcpPresets,
+  fetchProviderModels,
   importMcpConfig,
+  loginProviderOAuth,
+  logoutProviderOAuth,
   runCliAppAction,
   runMcpPresetAction,
   saveCustomMcpServer,
   updateImageGenerationSettings,
   updateMcpServerTools,
+  updateModelConfiguration,
+  updateNetworkSafetySettings,
   updateProviderSettings,
   updateSettings,
   updateWebSearchSettings,
 } from "@/lib/api";
 import { notifyCliAppsChanged } from "@/lib/cli-app-events";
+import { getHostApi } from "@/lib/runtime";
 import { notifyMcpPresetsChanged } from "@/lib/mcp-preset-events";
 import {
   logoFallbackUrls,
@@ -99,23 +106,29 @@ import type {
   ImageGenerationSettingsUpdate,
   McpPresetInfo,
   McpPresetsPayload,
+  NetworkSafetySettingsUpdate,
+  ProviderModelsPayload,
   SettingsPayload,
   WebSearchSettingsUpdate,
+  WebuiDefaultAccessMode,
 } from "@/lib/types";
 
-type SettingsSectionKey =
+export type SettingsSectionKey =
   | "overview"
   | "appearance"
   | "models"
   | "image"
-  | "web"
-  | "cliApps"
-  | "mcp"
+  | "browser"
+  | "apps"
   | "runtime"
   | "advanced";
 
 type LocalDensity = "comfortable" | "compact";
 type LocalActivityMode = "auto" | "expanded";
+type AppsKindFilter = "all" | "cli" | "mcp";
+type AppsCatalogItem =
+  | { id: string; kind: "cli"; app: CliAppInfo }
+  | { id: string; kind: "mcp"; preset: McpPresetInfo };
 
 interface LocalPreferences {
   density: LocalDensity;
@@ -128,6 +141,8 @@ interface AgentSettingsDraft {
   model: string;
   provider: string;
   modelPreset: string;
+  presetLabel: string;
+  contextWindowTokens: number;
   timezone: string;
   botName: string;
   botIcon: string;
@@ -140,13 +155,37 @@ interface ModelConfigurationDraft {
   model: string;
 }
 
-type PendingRestartSection = "runtime" | "web" | "image";
+type PendingRestartSection = "runtime" | "browser" | "image";
 type PendingRestartSections = Record<PendingRestartSection, boolean>;
+type RestartAwarePayload = {
+  requires_restart?: boolean;
+  surface?: SettingsPayload["surface"];
+  runtime_surface?: SettingsPayload["runtime_surface"];
+  runtime_capabilities?: SettingsPayload["runtime_capabilities"];
+};
 type ProviderApiType = "auto" | "chat_completions" | "responses";
 type ProviderForm = { apiKey: string; apiBase: string; apiType: ProviderApiType };
 type CustomMcpTransport = "stdio" | "streamableHttp" | "sse";
 
 const NANOBOT_ICON_SRC = "/brand/nanobot_icon.png";
+const CONTEXT_WINDOW_TOKEN_OPTIONS = [65_536, 262_144] as const;
+const DEFERRED_MODEL_LIST_PROVIDERS = new Set([
+  "aihubmix",
+  "atomic_chat",
+  "byteplus",
+  "byteplus_coding_plan",
+  "huggingface",
+  "lm_studio",
+  "novita",
+  "ollama",
+  "openrouter",
+  "ovms",
+  "siliconflow",
+  "vllm",
+  "volcengine",
+  "volcengine_coding_plan",
+]);
+const DEFERRED_MODEL_LIST_QUERY_MIN_LENGTH = 2;
 
 const FALLBACK_TIMEZONES = [
   "UTC",
@@ -208,7 +247,7 @@ const IMAGE_ASPECT_RATIO_OPTIONS = ["1:1", "3:4", "9:16", "4:3", "16:9", "3:2", 
 const IMAGE_SIZE_OPTIONS = ["1K", "2K", "4K", "1024x1024", "1536x1024", "1024x1536"];
 const EMPTY_PENDING_RESTART_SECTIONS: PendingRestartSections = {
   runtime: false,
-  web: false,
+  browser: false,
   image: false,
 };
 
@@ -225,12 +264,18 @@ const DEFAULT_CUSTOM_MCP_FORM: CustomMcpForm = {
 
 interface SettingsViewProps {
   theme: "light" | "dark";
+  initialSection?: SettingsSectionKey;
+  showSidebar?: boolean;
   onToggleTheme: () => void;
   onBackToChat: () => void;
   onModelNameChange: (modelName: string | null) => void;
+  onSettingsChange?: (payload: SettingsPayload) => void;
+  onWorkspaceSettingsChange?: () => void | Promise<void>;
+  onSectionChange?: (section: SettingsSectionKey) => void;
   onLogout?: () => void;
   onRestart?: () => void;
   isRestarting?: boolean;
+  hostChromeInset?: boolean;
 }
 
 function readLocalPreferences(): LocalPreferences {
@@ -257,6 +302,10 @@ function defaultPreset(payload: SettingsPayload): SettingsPayload["model_presets
   return payload.model_presets.find((preset) => preset.is_default) ?? null;
 }
 
+function normalizeContextWindowTokens(value: number | null | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 65_536;
+}
+
 function editableDefaultProvider(payload: SettingsPayload): string {
   const base = defaultPreset(payload);
   return base?.provider ?? payload.agent.provider ?? payload.agent.resolved_provider ?? "";
@@ -264,12 +313,18 @@ function editableDefaultProvider(payload: SettingsPayload): string {
 
 export function SettingsView({
   theme,
+  initialSection = "overview",
+  showSidebar = true,
   onToggleTheme,
   onBackToChat,
   onModelNameChange,
+  onSettingsChange,
+  onWorkspaceSettingsChange,
+  onSectionChange,
   onLogout,
   onRestart,
   isRestarting = false,
+  hostChromeInset = false,
 }: SettingsViewProps) {
   const { t } = useTranslation();
   const { token } = useClient();
@@ -292,19 +347,17 @@ export function SettingsView({
   const [providerSaving, setProviderSaving] = useState<string | null>(null);
   const [webSearchSaving, setWebSearchSaving] = useState(false);
   const [imageGenerationSaving, setImageGenerationSaving] = useState(false);
+  const [networkSafetySaving, setNetworkSafetySaving] = useState(false);
+  const [hostEngineApplying, setHostEngineApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<SettingsSectionKey>("overview");
+  const [activeSection, setActiveSection] = useState<SettingsSectionKey>(initialSection);
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [providerQuery, setProviderQuery] = useState("");
-  const [cliAppsQuery, setCliAppsQuery] = useState("");
-  const [cliAppsCategory, setCliAppsCategory] = useState("all");
-  const [cliAppsInstallFilter, setCliAppsInstallFilter] = useState<"all" | "installed" | "notInstalled">("all");
+  const [appsQuery, setAppsQuery] = useState("");
   const [cliAppsMessage, setCliAppsMessage] = useState<string | null>(null);
   const [cliAppsError, setCliAppsError] = useState<string | null>(null);
   const [cliAppsFocusName, setCliAppsFocusName] = useState<string | null>(null);
-  const [mcpQuery, setMcpQuery] = useState("");
-  const [mcpCategory, setMcpCategory] = useState("all");
-  const [mcpInstallFilter, setMcpInstallFilter] = useState<"all" | "installed" | "notInstalled">("all");
+  const [appsKindFilter, setAppsKindFilter] = useState<AppsKindFilter>("all");
   const [mcpMessage, setMcpMessage] = useState<string | null>(null);
   const [mcpError, setMcpError] = useState<string | null>(null);
   const [mcpFieldValues, setMcpFieldValues] = useState<Record<string, Record<string, string>>>({});
@@ -333,12 +386,30 @@ export function SettingsView({
     defaultImageSize: "1K",
     maxImagesPerTurn: 4,
   });
+  const [networkSafetyForm, setNetworkSafetyForm] = useState<NetworkSafetySettingsUpdate>({
+    webuiAllowLocalServiceAccess: true,
+    webuiDefaultAccessMode: "default",
+  });
+
+  useEffect(() => {
+    setActiveSection(initialSection);
+  }, [initialSection]);
+
+  const selectSection = useCallback(
+    (section: SettingsSectionKey) => {
+      setActiveSection(section);
+      onSectionChange?.(section);
+    },
+    [onSectionChange],
+  );
   const [webSearchKeyVisible, setWebSearchKeyVisible] = useState(false);
   const [webSearchKeyEditing, setWebSearchKeyEditing] = useState(false);
   const [form, setForm] = useState<AgentSettingsDraft>({
     model: "",
     provider: "",
     modelPreset: "default",
+    presetLabel: "Default",
+    contextWindowTokens: 65_536,
     timezone: "UTC",
     botName: "nanobot",
     botIcon: "",
@@ -353,11 +424,20 @@ export function SettingsView({
 
   const applyPayload = useCallback((payload: SettingsPayload) => {
     const fallbackDefault = defaultPreset(payload);
+    const activePresetName = modelPresetValue(payload);
+    const activePreset =
+      payload.model_presets.find((preset) => preset.name === activePresetName) ?? fallbackDefault;
     setSettings(payload);
     setForm({
-      model: fallbackDefault?.model ?? payload.agent.model,
-      provider: editableDefaultProvider(payload),
-      modelPreset: modelPresetValue(payload),
+      model: activePreset?.model ?? payload.agent.model,
+      provider: activePreset?.is_default
+        ? editableDefaultProvider(payload)
+        : activePreset?.provider ?? editableDefaultProvider(payload),
+      modelPreset: activePresetName,
+      presetLabel: activePreset?.label ?? activePresetName,
+      contextWindowTokens: normalizeContextWindowTokens(
+        activePreset?.context_window_tokens ?? payload.agent.context_window_tokens,
+      ),
       timezone: payload.agent.timezone,
       botName: payload.agent.bot_name,
       botIcon: payload.agent.bot_icon,
@@ -379,14 +459,19 @@ export function SettingsView({
       defaultImageSize: payload.image_generation.default_image_size,
       maxImagesPerTurn: payload.image_generation.max_images_per_turn,
     });
+    setNetworkSafetyForm({
+      webuiAllowLocalServiceAccess: payload.advanced.webui_allow_local_service_access ?? payload.advanced.allow_local_preview_access ?? true,
+      webuiDefaultAccessMode: visibleWebuiDefaultAccessMode(payload.advanced.webui_default_access_mode),
+    });
     if (payload.restart_required_sections) {
       setPendingRestartSections({
         runtime: payload.restart_required_sections.includes("runtime"),
-        web: payload.restart_required_sections.includes("web"),
+        browser: payload.restart_required_sections.includes("browser"),
         image: payload.restart_required_sections.includes("image"),
       });
     }
-  }, []);
+    onSettingsChange?.(payload);
+  }, [onSettingsChange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -410,6 +495,7 @@ export function SettingsView({
   }, [applyPayload, token]);
 
   useEffect(() => {
+    if (activeSection !== "apps") return;
     let cancelled = false;
     setCliAppsLoading(true);
     fetchCliApps(token)
@@ -428,9 +514,10 @@ export function SettingsView({
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [activeSection, token]);
 
   useEffect(() => {
+    if (activeSection !== "apps") return;
     let cancelled = false;
     setMcpPresetsLoading(true);
     fetchMcpPresets(token)
@@ -449,7 +536,7 @@ export function SettingsView({
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [activeSection, token]);
 
   useEffect(() => {
     try {
@@ -476,13 +563,18 @@ export function SettingsView({
 
   const modelDirty = useMemo(() => {
     if (!settings) return false;
-    const preset = modelPresetValue(settings);
-    const base = defaultPreset(settings);
+    const activePresetName = modelPresetValue(settings);
+    const selectedPreset = settings.model_presets.find((preset) => preset.name === form.modelPreset);
+    if (!selectedPreset) return form.modelPreset !== activePresetName;
+    const selectedProvider = selectedPreset.is_default
+      ? editableDefaultProvider(settings)
+      : selectedPreset.provider;
     return (
-      form.modelPreset !== preset ||
-      (form.modelPreset === "default" &&
-        (form.model !== (base?.model ?? settings.agent.model) ||
-          form.provider !== editableDefaultProvider(settings)))
+      form.modelPreset !== activePresetName ||
+      form.model !== selectedPreset.model ||
+      form.provider !== selectedProvider ||
+      form.contextWindowTokens !== normalizeContextWindowTokens(selectedPreset.context_window_tokens) ||
+      (!selectedPreset.is_default && form.presetLabel.trim() !== selectedPreset.label)
     );
   }, [form, settings]);
 
@@ -491,8 +583,7 @@ export function SettingsView({
     return (
       form.timezone !== settings.agent.timezone ||
       form.botName !== settings.agent.bot_name ||
-      form.botIcon !== settings.agent.bot_icon ||
-      form.toolHintMaxLength !== settings.agent.tool_hint_max_length
+      form.botIcon !== settings.agent.bot_icon
     );
   }, [form, settings]);
 
@@ -508,6 +599,17 @@ export function SettingsView({
     );
   }, [imageGenerationForm, settings]);
 
+  const networkSafetyDirty = useMemo(() => {
+    if (!settings) return false;
+    const currentLocalServiceAccess =
+      settings.advanced.webui_allow_local_service_access ?? settings.advanced.allow_local_preview_access ?? true;
+    const currentDefaultAccess = visibleWebuiDefaultAccessMode(settings.advanced.webui_default_access_mode);
+    return (
+      networkSafetyForm.webuiAllowLocalServiceAccess !== currentLocalServiceAccess ||
+      networkSafetyForm.webuiDefaultAccessMode !== currentDefaultAccess
+    );
+  }, [networkSafetyForm, settings]);
+
   const configuredModelProviderOptions = useMemo(
     () =>
       settings?.providers
@@ -520,22 +622,88 @@ export function SettingsView({
     () =>
       !!settings?.requires_restart ||
       pendingRestartSections.runtime ||
-      pendingRestartSections.web ||
+      pendingRestartSections.browser ||
       pendingRestartSections.image,
     [pendingRestartSections, settings?.requires_restart],
+  );
+
+  const restartViaSettingsSurface = useCallback(async () => {
+    const isNativeHost = (settings?.surface ?? settings?.runtime_surface) === "native";
+    const hostApi = getHostApi();
+    if (isNativeHost && settings?.runtime_capabilities?.can_restart_engine && hostApi) {
+      setHostEngineApplying(true);
+      try {
+        await hostApi.restartEngine();
+        const payload = await fetchSettings(token);
+        applyPayload(payload);
+        setPendingRestartSections(EMPTY_PENDING_RESTART_SECTIONS);
+        setError(null);
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setHostEngineApplying(false);
+      }
+      return;
+    }
+    onRestart?.();
+  }, [applyPayload, onRestart, settings, token]);
+
+  const maybeRestartHostEngine = useCallback(
+    async (payload: RestartAwarePayload) => {
+      const surface = payload.surface ?? payload.runtime_surface ?? settings?.surface ?? settings?.runtime_surface;
+      const capabilities = payload.runtime_capabilities ?? settings?.runtime_capabilities;
+      const isNativeHost = surface === "native";
+      const hostApi = getHostApi();
+      if (!payload.requires_restart || !isNativeHost || !capabilities?.can_restart_engine || !hostApi) {
+        return;
+      }
+      setHostEngineApplying(true);
+      try {
+        await hostApi.restartEngine();
+        const refreshed = await fetchSettings(token);
+        applyPayload(refreshed);
+        setPendingRestartSections(EMPTY_PENDING_RESTART_SECTIONS);
+        setError(null);
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setHostEngineApplying(false);
+      }
+    },
+    [applyPayload, settings, token],
   );
 
   const saveModelSettings = async () => {
     if (!settings || !modelDirty || saving) return;
     setSaving(true);
     try {
-      const defaultModel = defaultPreset(settings)?.model ?? settings.agent.model;
-      const defaultProvider = editableDefaultProvider(settings);
-      const payload = await updateSettings(token, {
-        modelPreset: form.modelPreset,
-        ...(form.modelPreset === "default" && form.model !== defaultModel ? { model: form.model } : {}),
-        ...(form.modelPreset === "default" && form.provider !== defaultProvider ? { provider: form.provider } : {}),
-      });
+      const selectedPreset = settings.model_presets.find((preset) => preset.name === form.modelPreset);
+      let payload: SettingsPayload;
+      if (selectedPreset && !selectedPreset.is_default) {
+        payload = await updateModelConfiguration(token, {
+          name: selectedPreset.name,
+          label: form.presetLabel.trim(),
+          model: form.model,
+          provider: form.provider,
+          ...(form.contextWindowTokens !== selectedPreset.context_window_tokens
+            ? { contextWindowTokens: form.contextWindowTokens }
+            : {}),
+        });
+      } else {
+        const defaultModel = defaultPreset(settings)?.model ?? settings.agent.model;
+        const defaultProvider = editableDefaultProvider(settings);
+        const defaultContextWindowTokens = normalizeContextWindowTokens(
+          defaultPreset(settings)?.context_window_tokens ?? settings.agent.context_window_tokens,
+        );
+        payload = await updateSettings(token, {
+          modelPreset: form.modelPreset,
+          ...(form.model !== defaultModel ? { model: form.model } : {}),
+          ...(form.provider !== defaultProvider ? { provider: form.provider } : {}),
+          ...(form.contextWindowTokens !== defaultContextWindowTokens
+            ? { contextWindowTokens: form.contextWindowTokens }
+            : {}),
+        });
+      }
       applyPayload(payload);
       onModelNameChange(payload.agent.model || null);
       setError(null);
@@ -593,12 +761,13 @@ export function SettingsView({
         timezone: form.timezone,
         botName: form.botName,
         botIcon: form.botIcon,
-        toolHintMaxLength: form.toolHintMaxLength,
       });
       applyPayload(payload);
       if (payload.requires_restart) {
         setPendingRestartSections((prev) => ({ ...prev, runtime: true }));
       }
+      await onWorkspaceSettingsChange?.();
+      await maybeRestartHostEngine(payload);
       setError(null);
     } catch (err) {
       setError((err as Error).message);
@@ -616,6 +785,7 @@ export function SettingsView({
       if (payload.requires_restart) {
         setPendingRestartSections((prev) => ({ ...prev, image: true }));
       }
+      await maybeRestartHostEngine(payload);
       setError(null);
     } catch (err) {
       setError((err as Error).message);
@@ -624,10 +794,29 @@ export function SettingsView({
     }
   };
 
+  const saveNetworkSafetySettings = async () => {
+    if (!settings || !networkSafetyDirty || networkSafetySaving) return;
+    setNetworkSafetySaving(true);
+    try {
+      const payload = await updateNetworkSafetySettings(token, networkSafetyForm);
+      applyPayload(payload);
+      if (payload.requires_restart) {
+        setPendingRestartSections((prev) => ({ ...prev, runtime: true }));
+      }
+      await maybeRestartHostEngine(payload);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setNetworkSafetySaving(false);
+    }
+  };
+
   const saveProvider = async (providerName: string) => {
     if (providerSaving) return;
     const provider = settings?.providers.find((item) => item.name === providerName);
     if (!provider) return;
+    if (provider.auth_type === "oauth") return;
     const providerForm = providerForms[providerName] ?? { apiKey: "", apiBase: "", apiType: "auto" };
     const apiKey = providerForm.apiKey.trim();
     const apiKeyRequired = provider.api_key_required ?? true;
@@ -647,6 +836,7 @@ export function SettingsView({
       if (payload.requires_restart) {
         setPendingRestartSections((prev) => ({ ...prev, image: true }));
       }
+      await maybeRestartHostEngine(payload);
       setProviderForms((prev) => ({
         ...prev,
         [providerName]: {
@@ -657,6 +847,24 @@ export function SettingsView({
       }));
       setVisibleProviderKeys((prev) => ({ ...prev, [providerName]: false }));
       setEditingProviderKeys((prev) => ({ ...prev, [providerName]: false }));
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setProviderSaving(null);
+    }
+  };
+
+  const runProviderOAuth = async (providerName: string, action: "login" | "logout") => {
+    if (providerSaving) return;
+    setProviderSaving(providerName);
+    try {
+      const payload =
+        action === "login"
+          ? await loginProviderOAuth(token, providerName)
+          : await logoutProviderOAuth(token, providerName);
+      applyPayload(payload);
+      setExpandedProvider(providerName);
       setError(null);
     } catch (err) {
       setError((err as Error).message);
@@ -701,8 +909,9 @@ export function SettingsView({
       const payload = await updateWebSearchSettings(token, update);
       applyPayload(payload);
       if (payload.requires_restart || webFetchRestartRequired) {
-        setPendingRestartSections((prev) => ({ ...prev, web: true }));
+        setPendingRestartSections((prev) => ({ ...prev, browser: true }));
       }
+      await maybeRestartHostEngine(payload);
       setWebSearchForm((prev) => ({
         provider: payload.web_search.provider,
         apiKey: "",
@@ -834,6 +1043,7 @@ export function SettingsView({
       if (payload.requires_restart) {
         setPendingRestartSections((prev) => ({ ...prev, runtime: true }));
       }
+      await maybeRestartHostEngine(payload);
       if (action === "enable") {
         setMcpFieldValues((prev) => ({ ...prev, [name]: {} }));
       }
@@ -867,6 +1077,7 @@ export function SettingsView({
       if (payload.requires_restart) {
         setPendingRestartSections((prev) => ({ ...prev, runtime: true }));
       }
+      await maybeRestartHostEngine(payload);
       setCustomMcpForm((prev) => ({ ...DEFAULT_CUSTOM_MCP_FORM, transport: prev.transport }));
     } catch (err) {
       setMcpError((err as Error).message);
@@ -887,6 +1098,7 @@ export function SettingsView({
       if (payload.requires_restart) {
         setPendingRestartSections((prev) => ({ ...prev, runtime: true }));
       }
+      await maybeRestartHostEngine(payload);
       setMcpConfigImport("");
     } catch (err) {
       setMcpError((err as Error).message);
@@ -907,6 +1119,7 @@ export function SettingsView({
       if (payload.requires_restart) {
         setPendingRestartSections((prev) => ({ ...prev, runtime: true }));
       }
+      await maybeRestartHostEngine(payload);
     } catch (err) {
       setMcpError((err as Error).message);
     } finally {
@@ -922,10 +1135,10 @@ export function SettingsView({
           <OverviewSettings
             settings={settings}
             requiresRestart={hasPendingRestart}
-            onRestart={onRestart}
-            isRestarting={isRestarting}
+            onRestart={restartViaSettingsSurface}
+            isRestarting={isRestarting || hostEngineApplying}
             showBrandLogos={localPrefs.brandLogos}
-            onSelectSection={setActiveSection}
+            onSelectSection={selectSection}
           />
         );
       case "appearance":
@@ -941,12 +1154,15 @@ export function SettingsView({
         return (
           <div className="space-y-8">
             <ModelsSettings
+              token={token}
               form={form}
               setForm={setForm}
               settings={settings}
               dirty={modelDirty}
               saving={saving}
               showBrandLogos={localPrefs.brandLogos}
+              providerSaving={providerSaving}
+              onProviderOAuthLogin={(provider) => runProviderOAuth(provider, "login")}
               onSave={saveModelSettings}
               onCreateConfiguration={openModelConfigurationDialog}
             />
@@ -975,10 +1191,12 @@ export function SettingsView({
                 }))
               }
               onSaveProvider={saveProvider}
+              onProviderOAuthLogin={(provider) => runProviderOAuth(provider, "login")}
+              onProviderOAuthLogout={(provider) => runProviderOAuth(provider, "logout")}
               onResetProviderDraft={resetProviderDraft}
               imageProviderRestartPending={pendingRestartSections.image}
-              onRestart={onRestart}
-              isRestarting={isRestarting}
+              onRestart={restartViaSettingsSurface}
+              isRestarting={isRestarting || hostEngineApplying}
             />
           </div>
         );
@@ -991,14 +1209,14 @@ export function SettingsView({
             saving={imageGenerationSaving}
             onChangeForm={setImageGenerationForm}
             onSave={saveImageGenerationSettings}
-            onOpenProviders={() => setActiveSection("models")}
+            onOpenProviders={() => selectSection("models")}
             showBrandLogos={localPrefs.brandLogos}
-            onRestart={onRestart}
-            isRestarting={isRestarting}
+            onRestart={restartViaSettingsSurface}
+            isRestarting={isRestarting || hostEngineApplying}
             requiresRestartPending={pendingRestartSections.image}
           />
         );
-      case "web":
+      case "browser":
         return (
           <WebSettings
             settings={settings}
@@ -1017,53 +1235,44 @@ export function SettingsView({
             onReset={resetWebSearchDraft}
             onSave={saveWebSearch}
             showBrandLogos={localPrefs.brandLogos}
-            onRestart={onRestart}
-            isRestarting={isRestarting}
-            requiresRestartPending={pendingRestartSections.web}
+            onRestart={restartViaSettingsSurface}
+            isRestarting={isRestarting || hostEngineApplying}
+            requiresRestartPending={pendingRestartSections.browser}
           />
         );
-      case "cliApps":
+      case "apps":
         return (
-          <CliAppsSettings
-            payload={cliApps}
-            loading={cliAppsLoading}
-            query={cliAppsQuery}
-            category={cliAppsCategory}
-            installFilter={cliAppsInstallFilter}
-            actionKey={cliAppsAction}
-            message={cliAppsMessage}
-            error={cliAppsError}
-            focusName={cliAppsFocusName}
-            showBrandLogos={localPrefs.brandLogos}
-            onQueryChange={setCliAppsQuery}
-            onCategoryChange={setCliAppsCategory}
-            onInstallFilterChange={setCliAppsInstallFilter}
-            onAction={handleCliAppAction}
-            onBackToChat={onBackToChat}
-          />
-        );
-      case "mcp":
-        return (
-          <McpPresetsSettings
-            payload={mcpPresets}
-            loading={mcpPresetsLoading}
-            query={mcpQuery}
-            category={mcpCategory}
-            installFilter={mcpInstallFilter}
-            actionKey={mcpPresetAction}
-            message={mcpMessage}
-            error={mcpError}
-            fieldValues={mcpFieldValues}
-            customForm={customMcpForm}
-            configImport={mcpConfigImport}
+          <AppsCatalogSettings
+            cliApps={cliApps}
+            mcpPresets={mcpPresets}
+            cliAppsLoading={cliAppsLoading}
+            mcpPresetsLoading={mcpPresetsLoading}
+            query={appsQuery}
+            filter={appsKindFilter}
+            cliActionKey={cliAppsAction}
+            mcpActionKey={mcpPresetAction}
+            cliMessage={cliAppsMessage}
+            cliError={cliAppsError}
+            cliFocusName={cliAppsFocusName}
+            mcpMessage={mcpMessage}
+            mcpError={mcpError}
+            mcpFieldValues={mcpFieldValues}
+            customMcpForm={customMcpForm}
+            mcpConfigImport={mcpConfigImport}
             showBrandLogos={localPrefs.brandLogos}
             requiresRestartPending={pendingRestartSections.runtime}
-            onQueryChange={setMcpQuery}
-            onCategoryChange={setMcpCategory}
-            onInstallFilterChange={setMcpInstallFilter}
-            onCustomFormChange={setCustomMcpForm}
-            onConfigImportChange={setMcpConfigImport}
-            onFieldChange={(presetName, fieldName, value) => {
+            onQueryChange={setAppsQuery}
+            onFilterChange={setAppsKindFilter}
+            onCliAction={handleCliAppAction}
+            onMcpAction={handleMcpPresetAction}
+            onDismissStatus={() => {
+              setCliAppsMessage(null);
+              setCliAppsError(null);
+              setMcpMessage(null);
+              setMcpError(null);
+            }}
+            onBackToChat={onBackToChat}
+            onMcpFieldChange={(presetName, fieldName, value) => {
               setMcpFieldValues((prev) => ({
                 ...prev,
                 [presetName]: {
@@ -1072,12 +1281,13 @@ export function SettingsView({
                 },
               }));
             }}
-            onAction={handleMcpPresetAction}
-            onSaveCustom={handleSaveCustomMcp}
-            onImportConfig={handleImportMcpConfig}
-            onToolsChange={handleMcpToolsChange}
-            onRestart={onRestart}
-            isRestarting={isRestarting}
+            onCustomMcpFormChange={setCustomMcpForm}
+            onMcpConfigImportChange={setMcpConfigImport}
+            onSaveCustomMcp={handleSaveCustomMcp}
+            onImportMcpConfig={handleImportMcpConfig}
+            onMcpToolsChange={handleMcpToolsChange}
+            onRestart={restartViaSettingsSurface}
+            isRestarting={isRestarting || hostEngineApplying}
           />
         );
       case "runtime":
@@ -1089,13 +1299,25 @@ export function SettingsView({
             dirty={runtimeDirty}
             saving={saving}
             onSave={saveRuntimeSettings}
-            onRestart={onRestart}
-            isRestarting={isRestarting}
+            onRestart={restartViaSettingsSurface}
+            isRestarting={isRestarting || hostEngineApplying}
             requiresRestartPending={pendingRestartSections.runtime}
           />
         );
       case "advanced":
-        return <AdvancedSettings settings={settings} />;
+        return (
+          <AdvancedSettings
+            form={networkSafetyForm}
+            dirty={networkSafetyDirty}
+            saving={networkSafetySaving}
+            isNativeHostSurface={(settings.surface ?? settings.runtime_surface) === "native"}
+            onChangeForm={setNetworkSafetyForm}
+            onSave={saveNetworkSafetySettings}
+            onRestart={restartViaSettingsSurface}
+            isRestarting={isRestarting || hostEngineApplying}
+            requiresRestartPending={pendingRestartSections.runtime}
+          />
+        );
       default:
         return null;
     }
@@ -1103,12 +1325,15 @@ export function SettingsView({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[radial-gradient(circle_at_50%_0%,hsl(var(--muted))_0%,hsl(var(--background))_42%)] md:flex-row">
-      <SettingsSidebar
-        activeSection={activeSection}
-        onSelectSection={setActiveSection}
-        onBackToChat={onBackToChat}
-        onLogout={onLogout}
-      />
+      {showSidebar ? (
+        <SettingsSidebar
+          activeSection={activeSection}
+          onSelectSection={selectSection}
+          onBackToChat={onBackToChat}
+          onLogout={onLogout}
+          hostChromeInset={hostChromeInset}
+        />
+      ) : null}
 
       <NewModelConfigurationDialog
         open={modelConfigurationOpen}
@@ -1122,7 +1347,12 @@ export function SettingsView({
       />
 
       <main className="min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-        <div className="mx-auto w-full max-w-[920px] px-5 py-8 sm:px-8 lg:py-12">
+        <div
+          className={cn(
+            "mx-auto w-full max-w-[920px] px-5 py-8 sm:px-8 lg:py-12",
+            hostChromeInset && "pt-[4.25rem] sm:pt-[4.25rem] lg:pt-[4.75rem]",
+          )}
+        >
           <div className="mb-7">
             <p className="mb-2 text-[13px] font-medium text-muted-foreground">
               {t("settings.sidebar.title")}
@@ -1164,12 +1394,14 @@ const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fal
   { key: "appearance", icon: Palette, fallback: "Appearance" },
   { key: "models", icon: SlidersHorizontal, fallback: "Models" },
   { key: "image", icon: ImageIcon, fallback: "Image" },
-  { key: "web", icon: Globe2, fallback: "Web" },
-  { key: "cliApps", icon: Package, fallback: "CLI Apps" },
-  { key: "mcp", icon: Layers, fallback: "MCP" },
-  { key: "runtime", icon: Server, fallback: "Runtime" },
-  { key: "advanced", icon: ShieldCheck, fallback: "Advanced" },
+  { key: "browser", icon: Globe2, fallback: "Web" },
+  { key: "runtime", icon: Server, fallback: "System" },
+  { key: "advanced", icon: ShieldCheck, fallback: "Security" },
 ];
+
+function visibleWebuiDefaultAccessMode(mode: string | null | undefined): WebuiDefaultAccessMode {
+  return mode === "full" ? "full" : "default";
+}
 
 function titleForSection(section: SettingsSectionKey): string {
   return SETTINGS_NAV_ITEMS.find((item) => item.key === section)?.fallback ?? "Settings";
@@ -1180,15 +1412,22 @@ function SettingsSidebar({
   onSelectSection,
   onBackToChat,
   onLogout,
+  hostChromeInset,
 }: {
   activeSection: SettingsSectionKey;
   onSelectSection: (section: SettingsSectionKey) => void;
   onBackToChat: () => void;
   onLogout?: () => void;
+  hostChromeInset?: boolean;
 }) {
   const { t } = useTranslation();
   return (
-    <aside className="flex w-full shrink-0 flex-col border-b border-border/55 bg-card/62 px-4 pb-3 pt-4 shadow-[inset_0_-1px_0_rgba(255,255,255,0.55)] backdrop-blur-xl dark:bg-card/45 dark:shadow-none md:w-[17rem] md:border-b-0 md:border-r md:px-3 md:py-4 md:shadow-[inset_-1px_0_0_rgba(255,255,255,0.55)]">
+    <aside
+      className={cn(
+        "flex w-full shrink-0 flex-col border-b border-border/55 bg-card/62 px-4 pb-3 shadow-[inset_0_-1px_0_rgba(255,255,255,0.55)] backdrop-blur-xl dark:bg-card/45 dark:shadow-none md:w-[17rem] md:border-b-0 md:border-r md:px-3 md:pb-4 md:shadow-[inset_-1px_0_0_rgba(255,255,255,0.55)]",
+        hostChromeInset ? "pt-[4.25rem] md:pt-[4.25rem]" : "pt-4 md:pt-4",
+      )}
+    >
       <button
         type="button"
         onClick={onBackToChat}
@@ -1230,7 +1469,7 @@ function SettingsSidebar({
       </nav>
 
       <div className="hidden md:mt-auto md:block md:pt-4">
-        {onLogout ? (
+        {onLogout && !hostChromeInset ? (
           <Button
             type="button"
             variant="ghost"
@@ -1345,7 +1584,7 @@ function OverviewSettings({
             value={providerDisplayLabel(settings.web_search.providers, settings.web_search.provider)}
             caption={webStatus}
             showBrandLogos={showBrandLogos}
-            onClick={() => onSelectSection("web")}
+            onClick={() => onSelectSection("browser")}
           />
           <OverviewListRow
             icon={ImageIcon}
@@ -1546,7 +1785,7 @@ function NewModelConfigurationDialog({
           <div className="space-y-4 px-5 py-5">
             <label className="block">
               <span className="mb-1.5 block text-[12px] font-medium text-muted-foreground">
-                {tx("settings.models.configurationName", "Name")}
+                {tx("settings.models.configurationName", "Configuration name")}
               </span>
               <Input
                 autoFocus
@@ -1619,41 +1858,59 @@ function NewModelConfigurationDialog({
 }
 
 function ModelsSettings({
+  token,
   form,
   setForm,
   settings,
   dirty,
   saving,
   showBrandLogos,
+  providerSaving,
+  onProviderOAuthLogin,
   onSave,
   onCreateConfiguration,
 }: {
+  token: string;
   form: AgentSettingsDraft;
   setForm: Dispatch<SetStateAction<AgentSettingsDraft>>;
   settings: SettingsPayload;
   dirty: boolean;
   saving: boolean;
   showBrandLogos: boolean;
+  providerSaving: string | null;
+  onProviderOAuthLogin: (provider: string) => void;
   onSave: () => void;
   onCreateConfiguration: () => void;
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
   const configuredProviders = settings.providers.filter((provider) => provider.configured);
+  const oauthProviders = settings.providers.filter((provider) => provider.auth_type === "oauth");
   const showAutoProvider = defaultPreset(settings)?.provider === "auto" || form.provider === "auto";
+  const selectableProviders = uniqueProviders([...configuredProviders, ...oauthProviders]);
   const providerOptions = showAutoProvider
-    ? [{ name: "auto", label: tx("settings.values.auto", "Auto") }, ...configuredProviders]
-    : configuredProviders;
+    ? [{ name: "auto", label: tx("settings.values.auto", "Auto") }, ...selectableProviders]
+    : selectableProviders;
   const providerValue = providerOptions.some((provider) => provider.name === form.provider)
     ? form.provider
     : "";
+  const selectedPreset =
+    settings.model_presets.find((preset) => preset.name === form.modelPreset) ?? null;
+  const selectedProvider = settings.providers.find((provider) => provider.name === form.provider);
+  const selectedProviderNeedsSignIn =
+    selectedProvider?.auth_type === "oauth" && !selectedProvider.configured;
+  const selectedProviderSigningIn = providerSaving === selectedProvider?.name;
+  const modelFieldsMissing =
+    !form.model.trim() ||
+    !form.provider.trim() ||
+    Boolean(selectedPreset && !selectedPreset.is_default && !form.presetLabel.trim());
   return (
     <div className="space-y-7">
       <section>
         <SettingsGroup>
           <SettingsRow
-            title={tx("settings.rows.currentModel", "Current model")}
-            description={tx("settings.help.currentModel", "Choose the model nanobot uses for new replies.")}
+            title={tx("settings.rows.currentModel", "Current configuration")}
+            description={tx("settings.help.currentModel", "Used for new replies.")}
           >
             <ModelPresetPicker
               presets={settings.model_presets}
@@ -1662,40 +1919,124 @@ function ModelsSettings({
               draftModel={form.model}
               draftProvider={form.provider}
               showProviderLogos={showBrandLogos}
-              onChange={(modelPreset) => setForm((prev) => ({ ...prev, modelPreset }))}
+              onChange={(modelPreset) => {
+                const nextPreset = settings.model_presets.find((preset) => preset.name === modelPreset);
+                setForm((prev) => ({
+                  ...prev,
+                  modelPreset,
+                  model: nextPreset?.model ?? prev.model,
+                  provider: nextPreset?.is_default
+                    ? editableDefaultProvider(settings)
+                    : nextPreset?.provider ?? prev.provider,
+                  presetLabel: nextPreset?.label ?? modelPreset,
+                  contextWindowTokens: normalizeContextWindowTokens(
+                    nextPreset?.context_window_tokens ?? prev.contextWindowTokens,
+                  ),
+                }));
+              }}
               onCreateConfiguration={onCreateConfiguration}
             />
           </SettingsRow>
-          {form.modelPreset === "default" ? (
-            <>
-              <SettingsRow
-                title={t("settings.rows.provider")}
-                description={t("settings.help.provider")}
-              >
-                <ProviderPicker
-                  providers={providerOptions}
-                  value={providerValue}
-                  emptyLabel={t("settings.byok.noConfiguredProviders")}
-                  showProviderLogos={showBrandLogos}
-                  onChange={(provider) => setForm((prev) => ({ ...prev, provider }))}
-                />
-              </SettingsRow>
-              <SettingsRow
-                title={t("settings.rows.model")}
-                description={t("settings.help.model")}
-              >
-                <Input
-                  value={form.model}
-                  onChange={(event) => setForm((prev) => ({ ...prev, model: event.target.value }))}
-                  className="h-8 w-[min(280px,70vw)] rounded-full text-[13px]"
-                />
-              </SettingsRow>
-            </>
+          {selectedPreset && !selectedPreset.is_default ? (
+            <SettingsRow
+              title={tx("settings.models.configurationName", "Configuration name")}
+              description={tx("settings.models.configurationNameHelp", "Rename this saved model configuration.")}
+            >
+              <Input
+                value={form.presetLabel}
+                onChange={(event) =>
+                  setForm((prev) => ({ ...prev, presetLabel: event.target.value }))
+                }
+                className="h-8 w-[min(280px,70vw)] rounded-full text-[13px]"
+              />
+            </SettingsRow>
           ) : null}
+          <SettingsRow
+            title={t("settings.rows.provider")}
+            description={t("settings.help.provider")}
+          >
+            <ProviderPicker
+              providers={providerOptions}
+              value={providerValue}
+              emptyLabel={t("settings.byok.noConfiguredProviders")}
+              showProviderLogos={showBrandLogos}
+              onChange={(provider) =>
+                setForm((prev) => ({
+                  ...prev,
+                  provider,
+                  model: provider === prev.provider ? prev.model : "",
+                }))
+              }
+            />
+          </SettingsRow>
+          {selectedProviderNeedsSignIn ? (
+            <SettingsRow
+              title={tx("settings.oauth.signInRequired", "Sign in required")}
+              description={tx(
+                "settings.oauth.signInBeforeSaving",
+                "Sign in before saving this OAuth provider as the active model provider.",
+              )}
+            >
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => selectedProvider && onProviderOAuthLogin(selectedProvider.name)}
+                disabled={!selectedProvider?.oauth_login_supported || selectedProviderSigningIn}
+                className="rounded-full"
+              >
+                {selectedProviderSigningIn ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+                ) : null}
+                {selectedProviderSigningIn
+                  ? tx("settings.oauth.signingIn", "Signing in...")
+                  : tx("settings.oauth.signIn", "Sign in")}
+              </Button>
+            </SettingsRow>
+          ) : null}
+          <SettingsRow
+            title={t("settings.rows.model")}
+            description={t("settings.help.model")}
+          >
+            <ModelIdPicker
+              token={token}
+              settings={settings}
+              provider={form.provider}
+              value={form.model}
+              showProviderLogos={showBrandLogos}
+              onChange={(model) => setForm((prev) => ({ ...prev, model }))}
+            />
+          </SettingsRow>
+          <SettingsRow
+            title={tx("settings.rows.contextWindow", "Context window")}
+            description={tx(
+              "settings.help.contextWindow",
+              "Choose the default context budget for this model configuration.",
+            )}
+          >
+            <SegmentedControl
+              value={String(form.contextWindowTokens)}
+              options={CONTEXT_WINDOW_TOKEN_OPTIONS.map((tokens) => ({
+                value: String(tokens),
+                label: tokens === 262_144 ? "256K" : "64K",
+              }))}
+              onChange={(value) =>
+                setForm((prev) => ({
+                  ...prev,
+                  contextWindowTokens: normalizeContextWindowTokens(Number(value)),
+                }))
+              }
+            />
+          </SettingsRow>
           <SettingsFooter
             dirty={dirty}
             saving={saving}
             saved={false}
+            disabled={selectedProviderNeedsSignIn || modelFieldsMissing}
+            message={
+              selectedProviderNeedsSignIn
+                ? tx("settings.oauth.signInBeforeSaving", "Sign in before saving this OAuth provider as the active model provider.")
+                : undefined
+            }
             onSave={onSave}
           />
         </SettingsGroup>
@@ -1719,6 +2060,8 @@ function ProvidersSettings({
   onToggleProviderKeyEditing,
   onChangeProviderForm,
   onSaveProvider,
+  onProviderOAuthLogin,
+  onProviderOAuthLogout,
   onResetProviderDraft,
   imageProviderRestartPending,
   onRestart,
@@ -1738,6 +2081,8 @@ function ProvidersSettings({
   onToggleProviderKeyEditing: (provider: string) => void;
   onChangeProviderForm: (provider: string, value: Partial<ProviderForm>) => void;
   onSaveProvider: (provider: string) => void;
+  onProviderOAuthLogin: (provider: string) => void;
+  onProviderOAuthLogout: (provider: string) => void;
   onResetProviderDraft: (provider: string) => void;
   imageProviderRestartPending: boolean;
   onRestart?: () => void;
@@ -1760,14 +2105,15 @@ function ProvidersSettings({
       apiType: provider.api_type ?? "auto",
     };
     const saving = providerSaving === provider.name;
+    const isOauthProvider = provider.auth_type === "oauth";
     const keyVisible = !!visibleProviderKeys[provider.name];
     const editingKey = !provider.configured || !!editingProviderKeys[provider.name];
     const apiKeyRequired = provider.api_key_required ?? true;
     const apiKey = form.apiKey.trim();
     const apiBase = form.apiBase.trim();
-    const missingRequiredApiKey = apiKeyRequired && !provider.configured && !apiKey;
+    const missingRequiredApiKey = !isOauthProvider && apiKeyRequired && !provider.configured && !apiKey;
     const missingOptionalCredential =
-      !apiKeyRequired && !provider.configured && !apiKey && !apiBase;
+      !isOauthProvider && !apiKeyRequired && !provider.configured && !apiKey && !apiBase;
     return (
       <div key={provider.name} className="divide-y divide-border/45">
         <button
@@ -1790,14 +2136,63 @@ function ProvidersSettings({
             </span>
           </span>
           <StatusPill tone={provider.configured ? "success" : "neutral"}>
-            {provider.configured
-              ? t("settings.byok.configured")
-              : t("settings.byok.notConfigured")}
+            {isOauthProvider
+              ? provider.configured
+                ? tx("settings.oauth.signedIn", "Signed in")
+                : tx("settings.oauth.notSignedIn", "Not signed in")
+              : provider.configured
+                ? t("settings.byok.configured")
+                : t("settings.byok.notConfigured")}
           </StatusPill>
         </button>
 
         {expanded ? (
           <div className="space-y-3 bg-muted/18 px-4 py-4 sm:px-5">
+            {isOauthProvider ? (
+              <div className="flex flex-col gap-3 rounded-[18px] border border-border/45 bg-background/75 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="text-[13px] font-semibold text-foreground">
+                    {tx("settings.oauth.authentication", "OAuth authentication")}
+                  </p>
+                  <p className="mt-1 truncate text-[12px] text-muted-foreground">
+                    {provider.configured
+                      ? t("settings.oauth.signedInAs", {
+                          account: provider.oauth_account || provider.label,
+                          defaultValue: "Signed in as {{account}}",
+                        })
+                      : tx("settings.oauth.signInHelp", "Sign in from this device; no API key is stored in config.")}
+                  </p>
+                </div>
+                <div className="flex shrink-0 justify-end gap-2">
+                  {provider.configured ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => onProviderOAuthLogout(provider.name)}
+                      disabled={saving}
+                      className="rounded-full"
+                    >
+                      {tx("settings.oauth.signOut", "Sign out")}
+                    </Button>
+                  ) : null}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onProviderOAuthLogin(provider.name)}
+                    disabled={saving || !provider.oauth_login_supported}
+                    className="rounded-full"
+                  >
+                    {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
+                    {saving
+                      ? tx("settings.oauth.signingIn", "Signing in...")
+                      : provider.configured
+                        ? tx("settings.oauth.signInAgain", "Sign in again")
+                        : tx("settings.oauth.signIn", "Sign in")}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <>
             <label className="block space-y-1.5">
               <span className="text-[12px] font-medium text-muted-foreground">
                 {t("settings.byok.apiKey")}
@@ -1920,6 +2315,8 @@ function ProvidersSettings({
                 {saving ? t("settings.actions.saving") : tx("settings.providers.saveProvider", "Save provider")}
               </Button>
             </div>
+              </>
+            )}
           </div>
         ) : null}
       </div>
@@ -2379,316 +2776,168 @@ function WebSettings({
   );
 }
 
-function CliAppsSettings({
-  payload,
-  loading,
+function AppsCatalogSettings({
+  cliApps,
+  mcpPresets,
+  cliAppsLoading,
+  mcpPresetsLoading,
   query,
-  category,
-  installFilter,
-  actionKey,
-  message,
-  error,
-  focusName,
-  showBrandLogos,
-  onQueryChange,
-  onCategoryChange,
-  onInstallFilterChange,
-  onAction,
-  onBackToChat,
-}: {
-  payload: CliAppsPayload | null;
-  loading: boolean;
-  query: string;
-  category: string;
-  installFilter: "all" | "installed" | "notInstalled";
-  actionKey: string | null;
-  message: string | null;
-  error: string | null;
-  focusName: string | null;
-  showBrandLogos: boolean;
-  onQueryChange: (value: string) => void;
-  onCategoryChange: (value: string) => void;
-  onInstallFilterChange: (value: "all" | "installed" | "notInstalled") => void;
-  onAction: (action: "install" | "update" | "uninstall" | "test", name: string) => void;
-  onBackToChat: () => void;
-}) {
-  const { t } = useTranslation();
-  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  const apps = payload?.apps ?? [];
-  const categories = useMemo(
-    () => ["all", ...Array.from(new Set(apps.map((app) => app.category))).sort()],
-    [apps],
-  );
-  const normalizedQuery = query.trim().toLowerCase();
-  const filteredApps = apps.filter((app) => {
-    const categoryMatch = category === "all" || app.category === category;
-    if (!categoryMatch) return false;
-    if (installFilter === "installed" && !app.installed) return false;
-    if (installFilter === "notInstalled" && app.installed) return false;
-    if (!normalizedQuery) return true;
-    return (
-      app.display_name.toLowerCase().includes(normalizedQuery) ||
-      app.name.toLowerCase().includes(normalizedQuery) ||
-      app.description.toLowerCase().includes(normalizedQuery) ||
-      app.category.toLowerCase().includes(normalizedQuery)
-    );
-  });
-  const categoryLabel =
-    category === "all"
-      ? tx("settings.cliApps.allCategories", "All categories")
-      : category;
-  const installFilterOptions = [
-    { value: "all", label: tx("settings.cliApps.filterAll", "All") },
-    { value: "installed", label: tx("settings.cliApps.filterInstalled", "Installed CLIs") },
-    { value: "notInstalled", label: tx("settings.cliApps.filterNotInstalled", "Not installed") },
-  ];
-  const focusedApp = focusName
-    ? apps.find((app) => app.name === focusName && app.installed)
-    : null;
-  const visibleStatusMessage = error || (!focusedApp ? message : null);
-
-  return (
-    <div className="space-y-5">
-      <section className="space-y-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <SettingsSectionTitle>{tx("settings.sections.cliApps", "CLI Apps")}</SettingsSectionTitle>
-            <p className="mt-1 text-[13px] text-muted-foreground">
-              {tx("settings.cliApps.summary", "{{installed}} of {{total}} CLIs installed")
-                .replace("{{installed}}", String(payload?.installed_count ?? 0))
-                .replace("{{total}}", String(apps.length))}
-            </p>
-          </div>
-          <SegmentedControl
-            value={installFilter}
-            options={installFilterOptions}
-            onChange={(value) => onInstallFilterChange(value as "all" | "installed" | "notInstalled")}
-          />
-        </div>
-
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="relative flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden />
-            <Input
-              value={query}
-              onChange={(event) => onQueryChange(event.target.value)}
-              placeholder={tx("settings.cliApps.searchPlaceholder", "Search CLIs")}
-              className="h-10 w-full rounded-full border-border/65 bg-card/80 pl-9 text-[13px] shadow-sm sm:max-w-[320px]"
-            />
-          </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="h-10 justify-between rounded-full bg-card/80 px-4">
-                <span className="max-w-[180px] truncate">{categoryLabel}</span>
-                <ChevronDown className="ml-2 h-3.5 w-3.5" aria-hidden />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="max-h-[320px] overflow-y-auto">
-              {categories.map((item) => (
-                <DropdownMenuItem key={item} onClick={() => onCategoryChange(item)}>
-                  {item === "all" ? tx("settings.cliApps.allCategories", "All categories") : item}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </section>
-
-      {visibleStatusMessage ? (
-        <div
-          className={cn(
-            "rounded-[10px] border px-3.5 py-2.5 text-[12.5px]",
-            error
-              ? "border-destructive/20 bg-destructive/5 text-destructive"
-              : "border-border/55 bg-muted/35 text-muted-foreground",
-          )}
-        >
-          {visibleStatusMessage}
-        </div>
-      ) : null}
-
-      {focusedApp ? (
-        <CliAppReadyPanel
-          app={focusedApp}
-          showBrandLogos={showBrandLogos}
-          onBackToChat={onBackToChat}
-        />
-      ) : null}
-
-      {loading ? (
-        <div className="flex h-36 items-center justify-center rounded-[8px] border border-border/45 bg-card/82 text-sm text-muted-foreground">
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
-          {tx("settings.cliApps.loading", "Loading CLI Apps...")}
-        </div>
-      ) : (
-        <section>
-          <div className="grid gap-2">
-            {filteredApps.map((app) => (
-              <CliAppCard
-                key={app.name}
-                app={app}
-                actionKey={actionKey}
-                showBrandLogos={showBrandLogos}
-                onAction={onAction}
-              />
-            ))}
-          </div>
-          {!filteredApps.length ? (
-            <div className="rounded-[8px] border border-border/45 bg-card/82 px-4 py-8 text-center text-sm text-muted-foreground">
-              {tx("settings.cliApps.empty", "No CLI Apps match this filter.")}
-            </div>
-          ) : null}
-        </section>
-      )}
-      <ThirdPartyBrandNotice />
-    </div>
-  );
-}
-
-function McpPresetsSettings({
-  payload,
-  loading,
-  query,
-  category,
-  installFilter,
-  actionKey,
-  message,
-  error,
-  fieldValues,
-  customForm,
-  configImport,
+  filter,
+  cliActionKey,
+  mcpActionKey,
+  cliMessage,
+  cliError,
+  cliFocusName,
+  mcpMessage,
+  mcpError,
+  mcpFieldValues,
+  customMcpForm,
+  mcpConfigImport,
   showBrandLogos,
   requiresRestartPending,
   onQueryChange,
-  onCategoryChange,
-  onInstallFilterChange,
-  onCustomFormChange,
-  onConfigImportChange,
-  onFieldChange,
-  onAction,
-  onSaveCustom,
-  onImportConfig,
-  onToolsChange,
+  onFilterChange,
+  onCliAction,
+  onMcpAction,
+  onDismissStatus,
+  onBackToChat,
+  onMcpFieldChange,
+  onCustomMcpFormChange,
+  onMcpConfigImportChange,
+  onSaveCustomMcp,
+  onImportMcpConfig,
+  onMcpToolsChange,
   onRestart,
   isRestarting,
 }: {
-  payload: McpPresetsPayload | null;
-  loading: boolean;
+  cliApps: CliAppsPayload | null;
+  mcpPresets: McpPresetsPayload | null;
+  cliAppsLoading: boolean;
+  mcpPresetsLoading: boolean;
   query: string;
-  category: string;
-  installFilter: "all" | "installed" | "notInstalled";
-  actionKey: string | null;
-  message: string | null;
-  error: string | null;
-  fieldValues: Record<string, Record<string, string>>;
-  customForm: CustomMcpForm;
-  configImport: string;
+  filter: AppsKindFilter;
+  cliActionKey: string | null;
+  mcpActionKey: string | null;
+  cliMessage: string | null;
+  cliError: string | null;
+  cliFocusName: string | null;
+  mcpMessage: string | null;
+  mcpError: string | null;
+  mcpFieldValues: Record<string, Record<string, string>>;
+  customMcpForm: CustomMcpForm;
+  mcpConfigImport: string;
   showBrandLogos: boolean;
   requiresRestartPending: boolean;
   onQueryChange: (value: string) => void;
-  onCategoryChange: (value: string) => void;
-  onInstallFilterChange: (value: "all" | "installed" | "notInstalled") => void;
-  onCustomFormChange: Dispatch<SetStateAction<CustomMcpForm>>;
-  onConfigImportChange: (value: string) => void;
-  onFieldChange: (presetName: string, fieldName: string, value: string) => void;
-  onAction: (action: "enable" | "remove" | "test", name: string, values?: Record<string, string>) => void;
-  onSaveCustom: () => void;
-  onImportConfig: () => void;
-  onToolsChange: (name: string, enabledTools: string[]) => void;
+  onFilterChange: (value: AppsKindFilter) => void;
+  onCliAction: (action: "install" | "update" | "uninstall" | "test", name: string) => void;
+  onMcpAction: (action: "enable" | "remove" | "test", name: string, values?: Record<string, string>) => void;
+  onDismissStatus: () => void;
+  onBackToChat: () => void;
+  onMcpFieldChange: (presetName: string, fieldName: string, value: string) => void;
+  onCustomMcpFormChange: Dispatch<SetStateAction<CustomMcpForm>>;
+  onMcpConfigImportChange: (value: string) => void;
+  onSaveCustomMcp: () => void;
+  onImportMcpConfig: () => void;
+  onMcpToolsChange: (name: string, enabledTools: string[]) => void;
   onRestart?: () => void;
   isRestarting?: boolean;
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  const presets = payload?.presets ?? [];
-  const categories = useMemo(
-    () => ["all", ...Array.from(new Set(presets.map((preset) => preset.category))).sort()],
-    [presets],
-  );
-  const normalizedQuery = query.trim().toLowerCase();
-  const filteredPresets = presets.filter((preset) => {
-    const categoryMatch = category === "all" || preset.category === category;
-    if (!categoryMatch) return false;
-    if (installFilter === "installed" && !preset.installed) return false;
-    if (installFilter === "notInstalled" && preset.installed) return false;
-    if (!normalizedQuery) return true;
-    return (
-      preset.display_name.toLowerCase().includes(normalizedQuery) ||
-      preset.name.toLowerCase().includes(normalizedQuery) ||
-      preset.description.toLowerCase().includes(normalizedQuery) ||
-      preset.category.toLowerCase().includes(normalizedQuery)
-    );
-  });
-  const installFilterOptions = [
-    { value: "all", label: tx("settings.mcp.filterAll", "All") },
-    { value: "installed", label: tx("settings.mcp.filterInstalled", "Enabled") },
-    { value: "notInstalled", label: tx("settings.mcp.filterNotInstalled", "Not enabled") },
+  const filterOptions = [
+    { value: "all", label: tx("settings.apps.filterAll", "All") },
+    { value: "cli", label: tx("settings.apps.filterCli", "App CLIs") },
+    { value: "mcp", label: tx("settings.apps.filterMcp", "MCP services") },
   ];
-  const categoryLabel = category === "all" ? tx("settings.mcp.allCategories", "All categories") : category;
-  const visibleStatusMessage = error || message;
-  const testToolNames = payload?.last_action?.tool_names ?? [];
-  const testToolCount = payload?.last_action?.tool_count;
-  const showTestDetails = typeof testToolCount === "number" || testToolNames.length > 0 || !!payload?.last_action?.error;
+  const normalizedQuery = query.trim().toLowerCase();
+  const items: AppsCatalogItem[] = [
+    ...(cliApps?.apps ?? []).map((app) => ({ id: `cli:${app.name}`, kind: "cli" as const, app })),
+    ...(mcpPresets?.presets ?? []).map((preset) => ({
+      id: `mcp:${preset.name}`,
+      kind: "mcp" as const,
+      preset,
+    })),
+  ]
+    .filter((item) => filter === "all" || item.kind === filter)
+    .filter((item) => !normalizedQuery || appsSearchText(item).includes(normalizedQuery))
+    .sort((left, right) => {
+      const rank = Number(!appsReady(left)) - Number(!appsReady(right));
+      return rank || appsTitle(left).localeCompare(appsTitle(right));
+    });
+  const focusedApp = cliFocusName
+    ? (cliApps?.apps ?? []).find((app) => app.name === cliFocusName && app.installed)
+    : null;
+  const loading = (cliAppsLoading || mcpPresetsLoading) && !cliApps && !mcpPresets;
+  const statusMessage = cliError || mcpError || (!focusedApp ? cliMessage || mcpMessage : null);
+  const statusIsError = Boolean(cliError || mcpError);
+  const caption = tx("settings.apps.caption", "{{cli}} CLI · {{mcp}} MCP")
+    .replace("{{cli}}", String(cliApps?.installed_count ?? 0))
+    .replace("{{mcp}}", String(mcpPresets?.installed_count ?? 0));
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-7">
       <section className="space-y-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <SettingsSectionTitle>{tx("settings.sections.mcp", "MCP")}</SettingsSectionTitle>
-            <p className="mt-1 text-[13px] text-muted-foreground">
-              {tx("settings.mcp.summary", "{{installed}} of {{total}} presets enabled")
-                .replace("{{installed}}", String(payload?.installed_count ?? 0))
-                .replace("{{total}}", String(presets.length))}
-            </p>
-          </div>
-          <SegmentedControl
-            value={installFilter}
-            options={installFilterOptions}
-            onChange={(value) => onInstallFilterChange(value as "all" | "installed" | "notInstalled")}
-          />
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <p className="max-w-[680px] text-[13px] leading-5 text-muted-foreground">
+            {tx(
+              "settings.apps.description",
+              "Add local app adapters and connected tool servers that nanobot can use from chat.",
+            )}
+          </p>
+          <span className="text-[12px] font-medium text-muted-foreground">{caption}</span>
         </div>
-
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
           <div className="relative flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden />
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
             <Input
               value={query}
               onChange={(event) => onQueryChange(event.target.value)}
-              placeholder={tx("settings.mcp.searchPlaceholder", "Search MCP presets")}
-              className="h-10 w-full rounded-full border-border/65 bg-card/80 pl-9 text-[13px] shadow-sm sm:max-w-[320px]"
+              placeholder={tx("settings.apps.searchPlaceholder", "Search Apps")}
+              className="h-12 rounded-[14px] border-border/70 bg-card/90 pl-11 text-[15px] shadow-sm"
             />
           </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="h-10 justify-between rounded-full bg-card/80 px-4">
-                <span className="max-w-[180px] truncate">{categoryLabel}</span>
-                <ChevronDown className="ml-2 h-3.5 w-3.5" aria-hidden />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="max-h-[320px] overflow-y-auto">
-              {categories.map((item) => (
-                <DropdownMenuItem key={item} onClick={() => onCategoryChange(item)}>
-                  {item === "all" ? tx("settings.mcp.allCategories", "All categories") : item}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <SegmentedControl
+            value={filter}
+            options={filterOptions}
+            onChange={(value) => onFilterChange(value as AppsKindFilter)}
+          />
         </div>
       </section>
 
-      <McpCustomServerPanel
-        form={customForm}
-        configImport={configImport}
-        actionKey={actionKey}
-        onFormChange={onCustomFormChange}
-        onConfigImportChange={onConfigImportChange}
-        onSave={onSaveCustom}
-        onImportConfig={onImportConfig}
-      />
+      {statusMessage ? (
+        <div
+          className={cn(
+            "flex items-center justify-between gap-3 rounded-[12px] border py-2.5 pl-4 pr-2 text-[13px]",
+            statusIsError
+              ? "border-destructive/20 bg-destructive/5 text-destructive"
+              : "border-border/55 bg-muted/35 text-muted-foreground",
+          )}
+        >
+          <span className="min-w-0">{statusMessage}</span>
+          <button
+            type="button"
+            aria-label={tx("settings.actions.dismiss", "Dismiss")}
+            title={tx("settings.actions.dismiss", "Dismiss")}
+            onClick={onDismissStatus}
+            className={cn(
+              "flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors",
+              statusIsError
+                ? "text-destructive/70 hover:bg-destructive/10 hover:text-destructive"
+                : "text-muted-foreground/70 hover:bg-muted hover:text-foreground",
+            )}
+          >
+            <X className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        </div>
+      ) : null}
+
+      {focusedApp ? (
+        <CliAppReadyPanel app={focusedApp} showBrandLogos={showBrandLogos} onBackToChat={onBackToChat} />
+      ) : null}
 
       {requiresRestartPending ? (
-        <div className="flex flex-col gap-3 rounded-[12px] border border-amber-500/20 bg-amber-500/8 px-3.5 py-3 text-[12.5px] text-amber-800 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 rounded-[12px] border border-amber-500/20 bg-amber-500/8 px-4 py-3 text-[12.5px] text-amber-800 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between">
           <span>{tx("settings.mcp.restartRequired", "Restart nanobot to connect updated MCP tools.")}</span>
           {onRestart ? (
             <Button
@@ -2699,86 +2948,513 @@ function McpPresetsSettings({
               disabled={isRestarting}
               className="h-8 rounded-full bg-background/80 px-3 text-[12px] font-semibold"
             >
-              {isRestarting ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden /> : <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />}
+              {isRestarting ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+              ) : (
+                <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              )}
               {isRestarting ? t("app.system.restarting") : t("app.system.restart")}
             </Button>
           ) : null}
         </div>
       ) : null}
 
-      {visibleStatusMessage ? (
-        <div
-          className={cn(
-            "rounded-[10px] border px-3.5 py-2.5 text-[12.5px]",
-            error
-              ? "border-destructive/20 bg-destructive/5 text-destructive"
-              : "border-border/55 bg-muted/35 text-muted-foreground",
-          )}
-        >
-          {visibleStatusMessage}
+      <section>
+        <div className="flex items-center justify-between border-b border-border/45 pb-3">
+          <SettingsSectionTitle>{tx("settings.apps.featured", "Featured")}</SettingsSectionTitle>
+          <span className="rounded-full bg-muted px-2.5 py-1 text-[12px] font-medium text-muted-foreground">
+            {items.length}
+          </span>
         </div>
+        {loading ? (
+          <div className="flex h-36 items-center justify-center text-sm text-muted-foreground">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+            {tx("settings.apps.loading", "Loading Apps...")}
+          </div>
+        ) : items.length ? (
+          <div className="grid gap-x-10 gap-y-1 py-3 md:grid-cols-2">
+            {items.map((item) =>
+              item.kind === "cli" ? (
+                <CliAppsCatalogRow
+                  key={item.id}
+                  app={item.app}
+                  actionKey={cliActionKey}
+                  showBrandLogos={showBrandLogos}
+                  onAction={onCliAction}
+                />
+              ) : (
+                <McpAppsCatalogRow
+                  key={item.id}
+                  preset={item.preset}
+                  values={mcpFieldValues[item.preset.name] ?? {}}
+                  actionKey={mcpActionKey}
+                  showBrandLogos={showBrandLogos}
+                  onFieldChange={onMcpFieldChange}
+                  onAction={onMcpAction}
+                  onToolsChange={onMcpToolsChange}
+                />
+              ),
+            )}
+          </div>
+        ) : (
+          <div className="px-3 py-12 text-center text-sm text-muted-foreground">
+            {tx("settings.apps.empty", "No apps match this filter.")}
+          </div>
+        )}
+      </section>
+
+      {filter !== "cli" ? (
+        <McpCustomServerPanel
+          form={customMcpForm}
+          configImport={mcpConfigImport}
+          actionKey={mcpActionKey}
+          onFormChange={onCustomMcpFormChange}
+          onConfigImportChange={onMcpConfigImportChange}
+          onSave={onSaveCustomMcp}
+          onImportConfig={onImportMcpConfig}
+        />
       ) : null}
 
-      {showTestDetails ? (
-        <div className="rounded-[10px] border border-border/55 bg-card/82 px-3.5 py-3 text-[12px] text-muted-foreground">
-          <div className="flex flex-wrap items-center gap-2">
-            {typeof testToolCount === "number" ? (
-              <span className="rounded-full bg-muted px-2 py-0.5 font-medium text-foreground/80">
-                {tx("settings.mcp.toolsFound", "{{count}} tools").replace("{{count}}", String(testToolCount))}
-              </span>
-            ) : null}
-            {payload?.last_action?.checked_at ? (
-              <span>{payload.last_action.checked_at}</span>
-            ) : null}
-          </div>
-          {testToolNames.length ? (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {testToolNames.map((toolName) => (
-                <span key={toolName} className="rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-foreground/80">
-                  {toolName}
-                </span>
-              ))}
-            </div>
-          ) : null}
-          {payload?.last_action?.error ? (
-            <p className="mt-2 font-mono text-[11px] text-destructive/75">
-              {payload.last_action.error}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-
-      {loading ? (
-        <div className="flex h-36 items-center justify-center rounded-[8px] border border-border/45 bg-card/82 text-sm text-muted-foreground">
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
-          {tx("settings.mcp.loading", "Loading MCP presets...")}
-        </div>
-      ) : (
-        <section>
-          <div className="grid gap-2">
-            {filteredPresets.map((preset) => (
-              <McpPresetCard
-                key={preset.name}
-                preset={preset}
-                values={fieldValues[preset.name] ?? {}}
-                actionKey={actionKey}
-                showBrandLogos={showBrandLogos}
-                onFieldChange={onFieldChange}
-                onAction={onAction}
-                onToolsChange={onToolsChange}
-              />
-            ))}
-          </div>
-          {!filteredPresets.length ? (
-            <div className="rounded-[8px] border border-border/45 bg-card/82 px-4 py-8 text-center text-sm text-muted-foreground">
-              {tx("settings.mcp.empty", "No MCP presets match this filter.")}
-            </div>
-          ) : null}
-        </section>
-      )}
       <ThirdPartyBrandNotice />
     </div>
   );
+}
+
+function CliAppsCatalogRow({
+  app,
+  actionKey,
+  showBrandLogos,
+  onAction,
+}: {
+  app: CliAppInfo;
+  actionKey: string | null;
+  showBrandLogos: boolean;
+  onAction: (action: "install" | "update" | "uninstall" | "test", name: string) => void;
+}) {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const installBusy = actionKey === `install:${app.name}`;
+  const updateBusy = actionKey === `update:${app.name}`;
+  const uninstallBusy = actionKey === `uninstall:${app.name}`;
+  const testBusy = actionKey === `test:${app.name}`;
+  const busy = installBusy || updateBusy || uninstallBusy || testBusy;
+  const description = app.description || app.requires || app.entry_point || app.name;
+
+  return (
+    <article className="group flex min-w-0 items-center gap-3 rounded-[14px] px-3 py-3 transition-colors hover:bg-muted/45">
+      <CliAppLogo app={app} showBrandLogos={showBrandLogos} />
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <h3 className="truncate text-[14px] font-semibold leading-5 text-foreground">{app.display_name}</h3>
+          <AppsTypeBadge>{tx("settings.apps.cliLabel", "CLI")}</AppsTypeBadge>
+        </div>
+        <p className="mt-0.5 truncate text-[12.5px] leading-5 text-muted-foreground">{description}</p>
+      </div>
+      <div className="flex shrink-0 items-center gap-1">
+        {app.installed ? (
+          <>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <AppsActionButton
+                  ariaLabel={tx("settings.cliApps.statusInstalled", "CLI installed")}
+                  busy={testBusy || updateBusy}
+                  disabled={busy}
+                  tone="installed"
+                >
+                  <Check className="h-4 w-4" aria-hidden />
+                </AppsActionButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem disabled={busy} onClick={() => onAction("test", app.name)}>
+                  <PlayCircle className="mr-2 h-3.5 w-3.5" aria-hidden />
+                  {tx("settings.cliApps.test", "Test CLI")}
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={busy} onClick={() => onAction("update", app.name)}>
+                  <RotateCcw className="mr-2 h-3.5 w-3.5" aria-hidden />
+                  {tx("settings.cliApps.update", "Update CLI")}
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={busy} onClick={() => onAction("uninstall", app.name)}>
+                  <Trash2 className="mr-2 h-3.5 w-3.5" aria-hidden />
+                  {tx("settings.cliApps.uninstall", "Uninstall CLI")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <AppsActionButton
+              ariaLabel={tx("settings.cliApps.uninstall", "Uninstall CLI")}
+              busy={uninstallBusy}
+              disabled={busy && !uninstallBusy}
+              tone="danger"
+              onClick={() => onAction("uninstall", app.name)}
+            >
+              <Trash2 className="h-4 w-4" aria-hidden />
+            </AppsActionButton>
+          </>
+        ) : app.install_supported ? (
+          <AppsActionButton
+            ariaLabel={tx("settings.cliApps.install", "Install CLI")}
+            busy={installBusy}
+            onClick={() => onAction("install", app.name)}
+          >
+            <Plus className="h-4 w-4" aria-hidden />
+          </AppsActionButton>
+        ) : (
+          <AppsActionButton ariaLabel={tx("settings.cliApps.unavailable", "Unavailable")} disabled>
+            <Plus className="h-4 w-4" aria-hidden />
+          </AppsActionButton>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function McpAppsCatalogRow({
+  preset,
+  values,
+  actionKey,
+  showBrandLogos,
+  onFieldChange,
+  onAction,
+  onToolsChange,
+}: {
+  preset: McpPresetInfo;
+  values: Record<string, string>;
+  actionKey: string | null;
+  showBrandLogos: boolean;
+  onFieldChange: (presetName: string, fieldName: string, value: string) => void;
+  onAction: (action: "enable" | "remove" | "test", name: string, values?: Record<string, string>) => void;
+  onToolsChange: (name: string, enabledTools: string[]) => void;
+}) {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const enableBusy = actionKey === `enable:${preset.name}`;
+  const removeBusy = actionKey === `remove:${preset.name}`;
+  const testBusy = actionKey === `test:${preset.name}`;
+  const toolsBusy = actionKey === `tools:${preset.name}`;
+  const busy = enableBusy || removeBusy || testBusy || toolsBusy;
+  const missingFields = preset.required_fields.filter((field) => field.required && !field.configured);
+  const hasFields = preset.required_fields.length > 0;
+  const needsSetupInput = missingFields.length > 0;
+  const readyInstalled = preset.installed && preset.configured;
+  const canEnable =
+    preset.install_supported &&
+    (missingFields.length === 0 || missingFields.every((field) => Boolean(values[field.name]?.trim())));
+  const toolNames = preset.tool_names ?? [];
+  const enabledTools = preset.enabled_tools ?? ["*"];
+  const allowAllTools = enabledTools.includes("*");
+  const enabledSet = new Set(allowAllTools ? toolNames : enabledTools);
+  const description = preset.description || preset.note || preset.requires || preset.name;
+  const statusLabel = mcpPresetStatusLabel(preset.status, tx);
+
+  useEffect(() => {
+    if (preset.configured || !preset.install_supported) setSetupOpen(false);
+  }, [preset.configured, preset.install_supported]);
+
+  const enableOrOpenSetup = () => {
+    if (needsSetupInput || (preset.installed && !preset.configured && hasFields)) {
+      setSetupOpen(true);
+      return;
+    }
+    onAction("enable", preset.name, values);
+  };
+  const submitSetup = () => {
+    if (!canEnable) return;
+    onAction("enable", preset.name, values);
+  };
+  const setTools = (next: string[]) => onToolsChange(preset.name, next);
+  const toggleTool = (toolName: string) => {
+    const next = new Set(allowAllTools ? toolNames : enabledTools);
+    if (next.has(toolName)) next.delete(toolName);
+    else next.add(toolName);
+    const nextValues = Array.from(next);
+    setTools(nextValues.length === toolNames.length ? ["*"] : nextValues);
+  };
+
+  return (
+    <article className="rounded-[14px] transition-colors hover:bg-muted/45">
+      <div className="group flex min-w-0 items-center gap-3 px-3 py-3">
+        <McpPresetLogo preset={preset} showBrandLogos={showBrandLogos} />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-baseline gap-2">
+            <h3 className="truncate text-[14px] font-semibold leading-5 text-foreground">{preset.display_name}</h3>
+            <AppsTypeBadge>{tx("settings.apps.mcpLabel", "MCP")}</AppsTypeBadge>
+          </div>
+          <p className="mt-0.5 truncate text-[12.5px] leading-5 text-muted-foreground">{description}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {readyInstalled ? (
+            <>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <AppsActionButton
+                    ariaLabel={statusLabel}
+                    busy={testBusy || toolsBusy}
+                    disabled={busy}
+                    tone="installed"
+                  >
+                    <Check className="h-4 w-4" aria-hidden />
+                  </AppsActionButton>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem disabled={busy} onClick={() => onAction("test", preset.name)}>
+                    <PlayCircle className="mr-2 h-3.5 w-3.5" aria-hidden />
+                    {tx("settings.mcp.test", "Test")}
+                  </DropdownMenuItem>
+                  {toolNames.length ? (
+                    <DropdownMenuItem disabled={busy} onClick={() => setToolsOpen((open) => !open)}>
+                      <SlidersHorizontal className="mr-2 h-3.5 w-3.5" aria-hidden />
+                      {tx("settings.mcp.toolScope", "Tools")}
+                    </DropdownMenuItem>
+                  ) : null}
+                  <DropdownMenuItem disabled={busy} onClick={() => onAction("remove", preset.name)}>
+                    <Trash2 className="mr-2 h-3.5 w-3.5" aria-hidden />
+                    {tx("settings.mcp.remove", "Remove")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <AppsActionButton
+                ariaLabel={tx("settings.mcp.remove", "Remove")}
+                busy={removeBusy}
+                disabled={busy && !removeBusy}
+                tone="danger"
+                onClick={() => onAction("remove", preset.name)}
+              >
+                <Trash2 className="h-4 w-4" aria-hidden />
+              </AppsActionButton>
+            </>
+          ) : preset.installed && !preset.configured ? (
+            <AppsActionButton
+              ariaLabel={hasFields ? tx("settings.mcp.configure", "Configure") : tx("settings.mcp.enable", "Enable")}
+              busy={enableBusy}
+              onClick={() => {
+                if (hasFields) setSetupOpen(true);
+                else onAction("enable", preset.name, values);
+              }}
+            >
+              <Plus className="h-4 w-4" aria-hidden />
+            </AppsActionButton>
+          ) : preset.install_supported ? (
+            <AppsActionButton
+              ariaLabel={needsSetupInput ? tx("settings.mcp.setup", "Set up") : tx("settings.mcp.enable", "Enable")}
+              busy={enableBusy}
+              onClick={enableOrOpenSetup}
+            >
+              <Plus className="h-4 w-4" aria-hidden />
+            </AppsActionButton>
+          ) : (
+            <AppsActionButton ariaLabel={tx("settings.mcp.comingSoon", "Coming soon")} disabled>
+              <Plus className="h-4 w-4" aria-hidden />
+            </AppsActionButton>
+          )}
+        </div>
+      </div>
+
+      {setupOpen && preset.install_supported && hasFields ? (
+        <div className="mx-3 mb-3 rounded-[14px] border border-border/45 bg-card/85 p-3 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-[12.5px] font-semibold text-foreground">
+                {tx("settings.mcp.connectTitle", "Connect {{name}}").replace("{{name}}", preset.display_name)}
+              </div>
+              <p className="mt-0.5 text-[11.5px] text-muted-foreground">
+                {tx("settings.mcp.connectHint", "Add the key from your account settings.")}
+              </p>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => setSetupOpen(false)}
+              className="h-7 rounded-full px-2.5 text-[11.5px] font-semibold text-muted-foreground"
+            >
+              {tx("actions.cancel", "Cancel")}
+            </Button>
+          </div>
+          <div className="mt-3 grid gap-2">
+            {preset.required_fields.map((field) => (
+              <label key={field.name} className="min-w-0">
+                <span className="mb-1 block text-[11.5px] font-medium text-muted-foreground">
+                  {field.label}
+                  {field.configured ? (
+                    <span className="ml-1 font-normal text-emerald-600 dark:text-emerald-300">
+                      {tx("settings.mcp.configured", "configured")}
+                    </span>
+                  ) : null}
+                </span>
+                <Input
+                  type={field.secret ? "password" : "text"}
+                  value={values[field.name] ?? ""}
+                  onChange={(event) => onFieldChange(preset.name, field.name, event.target.value)}
+                  placeholder={
+                    field.configured
+                      ? tx("settings.mcp.keepExisting", "Leave blank to keep existing")
+                      : field.placeholder
+                  }
+                  className="h-9 rounded-full bg-background/80 text-[12.5px]"
+                />
+              </label>
+            ))}
+          </div>
+          <div className="mt-3 flex justify-end">
+            <Button
+              type="button"
+              size="sm"
+              disabled={busy || !canEnable}
+              onClick={submitSetup}
+              className="h-8 rounded-full px-3 text-[12px] font-semibold"
+            >
+              {enableBusy ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+              ) : (
+                <Check className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              )}
+              {preset.installed
+                ? tx("settings.mcp.updateSetup", "Update setup")
+                : tx("settings.mcp.saveAndEnable", "Save and enable")}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {toolsOpen && readyInstalled && toolNames.length ? (
+        <div className="mx-3 mb-3 rounded-[14px] border border-border/45 bg-card/85 p-3 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-[11.5px] font-medium text-muted-foreground">
+              {tx("settings.mcp.toolScope", "Tools")}
+            </div>
+            <div className="flex items-center gap-1">
+              <Button
+                type="button"
+                size="sm"
+                variant={allowAllTools ? "default" : "outline"}
+                disabled={toolsBusy}
+                onClick={() => setTools(["*"])}
+                className="h-7 rounded-full px-2.5 text-[11.5px] font-semibold"
+              >
+                {tx("settings.mcp.allTools", "All")}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={!allowAllTools && enabledSet.size === 0 ? "default" : "outline"}
+                disabled={toolsBusy}
+                onClick={() => setTools([])}
+                className="h-7 rounded-full px-2.5 text-[11.5px] font-semibold"
+              >
+                {tx("settings.mcp.noTools", "None")}
+              </Button>
+            </div>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {toolNames.map((toolName) => {
+              const selected = enabledSet.has(toolName);
+              return (
+                <button
+                  key={toolName}
+                  type="button"
+                  disabled={toolsBusy}
+                  onClick={() => toggleTool(toolName)}
+                  className={cn(
+                    "max-w-full rounded-full border px-2.5 py-1 font-mono text-[11px] transition-colors",
+                    selected
+                      ? "border-blue-500/25 bg-blue-500/10 text-blue-700 dark:text-blue-300"
+                      : "border-border/55 bg-muted/30 text-muted-foreground hover:bg-muted/60",
+                  )}
+                >
+                  <span className="block max-w-[220px] truncate">{toolName}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function AppsTypeBadge({ children }: { children: ReactNode }) {
+  return (
+    <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-none tracking-[0.06em] text-muted-foreground">
+      {children}
+    </span>
+  );
+}
+
+const AppsActionButton = forwardRef<HTMLButtonElement, {
+  ariaLabel: string;
+  busy?: boolean;
+  disabled?: boolean;
+  tone?: "default" | "installed" | "danger";
+  onClick?: () => void;
+  children: ReactNode;
+}>(function AppsActionButton({
+  ariaLabel,
+  busy,
+  disabled,
+  tone = "default",
+  onClick,
+  children,
+}, ref) {
+  return (
+    <Button
+      ref={ref}
+      type="button"
+      size="icon"
+      variant="ghost"
+      aria-label={ariaLabel}
+      title={ariaLabel}
+      disabled={disabled || busy}
+      onClick={onClick}
+      className={cn(
+        "h-9 w-9 rounded-full text-muted-foreground transition-colors",
+        tone === "installed" && "bg-transparent hover:bg-muted/70 hover:text-foreground",
+        tone === "danger" && "bg-transparent hover:bg-destructive/10 hover:text-destructive",
+        tone === "default" && "bg-muted/70 hover:bg-muted hover:text-foreground",
+      )}
+    >
+      {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : children}
+    </Button>
+  );
+});
+
+function appsTitle(item: AppsCatalogItem): string {
+  return item.kind === "cli" ? item.app.display_name : item.preset.display_name;
+}
+
+function appsReady(item: AppsCatalogItem): boolean {
+  return item.kind === "cli" ? item.app.installed : item.preset.installed && item.preset.configured;
+}
+
+function appsSearchText(item: AppsCatalogItem): string {
+  if (item.kind === "cli") {
+    const app = item.app;
+    return [
+      app.display_name,
+      app.name,
+      app.category,
+      app.description,
+      app.requires,
+      app.entry_point,
+      app.source,
+    ]
+      .join(" ")
+      .toLowerCase();
+  }
+  const preset = item.preset;
+  return [
+    preset.display_name,
+    preset.name,
+    preset.category,
+    preset.description,
+    preset.requires,
+    preset.note,
+    preset.transport,
+    preset.source ?? "",
+  ]
+    .join(" ")
+    .toLowerCase();
 }
 
 function McpCustomServerPanel({
@@ -3017,292 +3693,6 @@ function McpCustomServerPanel({
   );
 }
 
-function McpPresetCard({
-  preset,
-  values,
-  actionKey,
-  showBrandLogos,
-  onFieldChange,
-  onAction,
-  onToolsChange,
-}: {
-  preset: McpPresetInfo;
-  values: Record<string, string>;
-  actionKey: string | null;
-  showBrandLogos: boolean;
-  onFieldChange: (presetName: string, fieldName: string, value: string) => void;
-  onAction: (action: "enable" | "remove" | "test", name: string, values?: Record<string, string>) => void;
-  onToolsChange: (name: string, enabledTools: string[]) => void;
-}) {
-  const { t } = useTranslation();
-  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  const enableBusy = actionKey === `enable:${preset.name}`;
-  const removeBusy = actionKey === `remove:${preset.name}`;
-  const testBusy = actionKey === `test:${preset.name}`;
-  const toolsBusy = actionKey === `tools:${preset.name}`;
-  const busy = enableBusy || removeBusy || testBusy || toolsBusy;
-  const [setupOpen, setSetupOpen] = useState(false);
-  const missingFields = preset.required_fields.filter((field) => field.required && !field.configured);
-  const hasFields = preset.required_fields.length > 0;
-  const needsSetupInput = missingFields.length > 0;
-  const showSetup = setupOpen && preset.install_supported && hasFields;
-  const readyInstalled = preset.installed && preset.configured;
-  const statusLabel = mcpPresetStatusLabel(preset.status, tx);
-  const canEnable = preset.install_supported && (
-    missingFields.length === 0 || missingFields.every((field) => Boolean(values[field.name]?.trim()))
-  );
-  const toolNames = preset.tool_names ?? [];
-  const enabledTools = preset.enabled_tools ?? ["*"];
-  const allowAllTools = enabledTools.includes("*");
-  const enabledSet = new Set(allowAllTools ? toolNames : enabledTools);
-  const showToolControls = preset.installed && toolNames.length > 0;
-  const setTools = (next: string[]) => onToolsChange(preset.name, next);
-  useEffect(() => {
-    if (preset.configured || !preset.install_supported) setSetupOpen(false);
-  }, [preset.configured, preset.install_supported]);
-  const enableOrOpenSetup = () => {
-    if (needsSetupInput || (preset.installed && !preset.configured && hasFields)) {
-      setSetupOpen(true);
-      return;
-    }
-    onAction("enable", preset.name, values);
-  };
-  const submitSetup = () => {
-    if (!canEnable) return;
-    onAction("enable", preset.name, values);
-  };
-  const toggleTool = (toolName: string) => {
-    const next = new Set(allowAllTools ? toolNames : enabledTools);
-    if (next.has(toolName)) {
-      next.delete(toolName);
-    } else {
-      next.add(toolName);
-    }
-    const nextValues = Array.from(next);
-    setTools(nextValues.length === toolNames.length ? ["*"] : nextValues);
-  };
-
-  return (
-    <article className="rounded-[8px] border border-border/45 bg-card/82 px-4 py-3 shadow-[0_6px_22px_rgba(15,23,42,0.045)]">
-      <div className="flex min-w-0 items-start gap-3">
-        <McpPresetLogo preset={preset} showBrandLogos={showBrandLogos} />
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <h3 className="truncate text-[14px] font-semibold leading-5 text-foreground">
-              {preset.display_name}
-            </h3>
-            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground">
-              {preset.category}
-            </span>
-            <span className={cn(
-              "shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-medium",
-              preset.installed
-                ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-                : "bg-muted text-muted-foreground",
-            )}>
-              {statusLabel}
-            </span>
-          </div>
-          <p className="mt-1 text-[12px] leading-5 text-muted-foreground">
-            {preset.description}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {preset.docs_url ? (
-            <a
-              className="inline-flex h-8 items-center rounded-full px-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              href={preset.docs_url}
-              target="_blank"
-              rel="noreferrer"
-              aria-label={tx("settings.mcp.openDocs", "Open docs")}
-            >
-              <Info className="h-3.5 w-3.5" aria-hidden />
-            </a>
-          ) : null}
-          {readyInstalled ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={busy}
-                  className="h-8 rounded-full border-emerald-500/20 bg-emerald-500/10 px-3 text-[12px] font-semibold text-emerald-700 hover:bg-emerald-500/12 dark:text-emerald-300"
-                >
-                  {busy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden /> : <Check className="mr-1.5 h-3.5 w-3.5" aria-hidden />}
-                  {tx("settings.mcp.enabled", "Enabled")}
-                  <ChevronDown className="ml-1.5 h-3 w-3" aria-hidden />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem disabled={busy} onClick={() => onAction("test", preset.name)}>
-                  <PlayCircle className="mr-2 h-3.5 w-3.5" aria-hidden />
-                  {tx("settings.mcp.test", "Test")}
-                </DropdownMenuItem>
-                <DropdownMenuItem disabled={busy} onClick={() => onAction("remove", preset.name)}>
-                  <Trash2 className="mr-2 h-3.5 w-3.5" aria-hidden />
-                  {tx("settings.mcp.remove", "Remove")}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : preset.installed && !preset.configured ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              onClick={() => {
-                if (hasFields) setSetupOpen(true);
-                else onAction("enable", preset.name, values);
-              }}
-              className="h-8 rounded-full border-amber-500/25 bg-amber-500/8 px-3 text-[12px] font-semibold text-amber-700 hover:bg-amber-500/12 dark:text-amber-300"
-            >
-              {enableBusy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
-              {hasFields ? tx("settings.mcp.configure", "Configure") : tx("settings.mcp.enable", "Enable")}
-            </Button>
-          ) : preset.install_supported ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              onClick={enableOrOpenSetup}
-              className="h-8 rounded-full px-4 text-[12px] font-semibold"
-            >
-              {enableBusy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
-              {needsSetupInput ? tx("settings.mcp.setup", "Set up") : tx("settings.mcp.enable", "Enable")}
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled
-              className="h-8 rounded-full px-3 text-[12px] font-semibold"
-            >
-              {tx("settings.mcp.comingSoon", "Coming soon")}
-            </Button>
-          )}
-        </div>
-      </div>
-      {showSetup ? (
-        <div className="mt-3 rounded-[12px] border border-border/45 bg-muted/18 p-3">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <div className="text-[12px] font-semibold text-foreground">
-                {tx("settings.mcp.connectTitle", "Connect {{name}}").replace("{{name}}", preset.display_name)}
-              </div>
-              <p className="mt-0.5 text-[11.5px] leading-4 text-muted-foreground">
-                {tx("settings.mcp.connectHint", "Add the key from your account settings.")}
-              </p>
-            </div>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              disabled={busy}
-              onClick={() => setSetupOpen(false)}
-              className="h-7 rounded-full px-2.5 text-[11.5px] font-semibold text-muted-foreground"
-            >
-              {tx("actions.cancel", "Cancel")}
-            </Button>
-          </div>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            {preset.required_fields.map((field) => (
-              <label key={field.name} className="min-w-0">
-                <span className="mb-1 block text-[11.5px] font-medium text-muted-foreground">
-                  {field.label}
-                  {field.configured ? (
-                    <span className="ml-1 font-normal text-emerald-600 dark:text-emerald-300">
-                      {tx("settings.mcp.configured", "configured")}
-                    </span>
-                  ) : null}
-                </span>
-                <Input
-                  type={field.secret ? "password" : "text"}
-                  value={values[field.name] ?? ""}
-                  onChange={(event) => onFieldChange(preset.name, field.name, event.target.value)}
-                  placeholder={field.configured ? tx("settings.mcp.keepExisting", "Leave blank to keep existing") : field.placeholder}
-                  className="h-9 rounded-full bg-background/80 text-[12.5px]"
-                />
-              </label>
-            ))}
-          </div>
-          <div className="mt-3 flex justify-end">
-            <Button
-              type="button"
-              size="sm"
-              disabled={busy || !canEnable}
-              onClick={submitSetup}
-              className="h-8 rounded-full px-3 text-[12px] font-semibold"
-            >
-              {enableBusy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden /> : <Check className="mr-1.5 h-3.5 w-3.5" aria-hidden />}
-              {preset.installed ? tx("settings.mcp.updateSetup", "Update setup") : tx("settings.mcp.saveAndEnable", "Save and enable")}
-            </Button>
-          </div>
-        </div>
-      ) : null}
-      {showToolControls ? (
-        <div className="mt-3 border-t border-border/35 pt-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-[11.5px] font-medium text-muted-foreground">
-              {toolsBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />}
-              {tx("settings.mcp.toolScope", "Tools")}
-            </div>
-            <div className="flex items-center gap-1">
-              <Button
-                type="button"
-                size="sm"
-                variant={allowAllTools ? "default" : "outline"}
-                disabled={toolsBusy}
-                onClick={() => setTools(["*"])}
-                className="h-7 rounded-full px-2.5 text-[11.5px] font-semibold"
-              >
-                {tx("settings.mcp.allTools", "All")}
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant={!allowAllTools && enabledSet.size === 0 ? "default" : "outline"}
-                disabled={toolsBusy}
-                onClick={() => setTools([])}
-                className="h-7 rounded-full px-2.5 text-[11.5px] font-semibold"
-              >
-                {tx("settings.mcp.noTools", "None")}
-              </Button>
-            </div>
-          </div>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {toolNames.map((toolName) => {
-              const selected = enabledSet.has(toolName);
-              return (
-                <button
-                  key={toolName}
-                  type="button"
-                  disabled={toolsBusy}
-                  onClick={() => toggleTool(toolName)}
-                  className={cn(
-                    "max-w-full rounded-full border px-2.5 py-1 font-mono text-[11px] transition-colors",
-                    selected
-                      ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-                      : "border-border/55 bg-muted/30 text-muted-foreground hover:bg-muted/60",
-                  )}
-                >
-                  <span className="block max-w-[220px] truncate">{toolName}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : preset.installed && !testBusy ? (
-        <div className="mt-3 border-t border-border/35 pt-3 text-[11.5px] text-muted-foreground">
-          {tx("settings.mcp.testForTools", "Run Test to inspect and choose individual tools.")}
-        </div>
-      ) : null}
-    </article>
-  );
-}
-
 function mcpPresetStatusLabel(status: string, tx: (key: string, fallback: string) => string): string {
   switch (status) {
     case "configured":
@@ -3435,105 +3825,6 @@ function CliAppReadyPanel({
   );
 }
 
-function CliAppCard({
-  app,
-  actionKey,
-  showBrandLogos,
-  onAction,
-}: {
-  app: CliAppInfo;
-  actionKey: string | null;
-  showBrandLogos: boolean;
-  onAction: (action: "install" | "update" | "uninstall" | "test", name: string) => void;
-}) {
-  const { t } = useTranslation();
-  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  const installBusy = actionKey === `install:${app.name}`;
-  const updateBusy = actionKey === `update:${app.name}`;
-  const uninstallBusy = actionKey === `uninstall:${app.name}`;
-  const testBusy = actionKey === `test:${app.name}`;
-  const busy = installBusy || updateBusy || uninstallBusy || testBusy;
-
-  return (
-    <article className="flex min-w-0 items-center gap-3 rounded-[8px] border border-border/45 bg-card/82 px-4 py-3 shadow-[0_6px_22px_rgba(15,23,42,0.045)]">
-      <CliAppLogo app={app} showBrandLogos={showBrandLogos} />
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-baseline gap-2">
-          <h3 className="truncate text-[14px] font-semibold leading-5 text-foreground">
-            {app.display_name}
-          </h3>
-          <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground">
-            {app.category}
-          </span>
-        </div>
-        <div className="mt-0.5 truncate text-[12px] text-muted-foreground">
-          {app.entry_point || app.name}
-        </div>
-        <p className="mt-1 truncate text-[12px] leading-5 text-muted-foreground">
-          {app.requires
-            ? `${tx("settings.cliApps.requires", "Requires")}: ${app.requires}`
-            : app.description || tx("settings.cliApps.noDescription", "No description available.")}
-        </p>
-      </div>
-      <div className="shrink-0">
-        {app.installed ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={busy}
-                className="h-8 rounded-full border-emerald-500/20 bg-emerald-500/10 px-3 text-[12px] font-semibold text-emerald-700 hover:bg-emerald-500/12 dark:text-emerald-300"
-              >
-                {busy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden /> : <Check className="mr-1.5 h-3.5 w-3.5" aria-hidden />}
-                {tx("settings.cliApps.statusInstalled", "CLI installed")}
-                <ChevronDown className="ml-1.5 h-3 w-3" aria-hidden />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem disabled={busy} onClick={() => onAction("test", app.name)}>
-                <PlayCircle className="mr-2 h-3.5 w-3.5" aria-hidden />
-                {tx("settings.cliApps.test", "Test CLI")}
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled={busy} onClick={() => onAction("update", app.name)}>
-                <RotateCcw className="mr-2 h-3.5 w-3.5" aria-hidden />
-                {tx("settings.cliApps.update", "Update CLI")}
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled={busy} onClick={() => onAction("uninstall", app.name)}>
-                <Trash2 className="mr-2 h-3.5 w-3.5" aria-hidden />
-                {tx("settings.cliApps.uninstall", "Uninstall CLI")}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : app.install_supported ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={busy}
-            onClick={() => onAction("install", app.name)}
-            className="h-8 rounded-full px-4 text-[12px] font-semibold"
-          >
-            {installBusy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
-            {tx("settings.cliApps.install", "Install CLI")}
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled
-            className="h-8 rounded-full px-3 text-[12px] font-semibold"
-          >
-            {tx("settings.cliApps.unavailable", "Unavailable")}
-          </Button>
-        )}
-      </div>
-    </article>
-  );
-}
-
 function CliAppLogo({ app, showBrandLogos }: { app: CliAppInfo; showBrandLogos: boolean }) {
   const [logoIndex, setLogoIndex] = useState(0);
   const bg = app.brand_color || "hsl(var(--muted))";
@@ -3596,26 +3887,73 @@ function RuntimeSettings({
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const isNativeHost = getHostApi() !== null || (settings.surface ?? settings.runtime_surface) === "native";
+  const restartActionLabel = isNativeHost
+    ? tx("app.system.restartEngine", "Restart engine")
+    : t("app.system.restart");
+  const restartingActionLabel = isNativeHost
+    ? tx("app.system.restartingEngine", "Restarting engine...")
+    : t("app.system.restarting");
+  const [diagnosticsPath, setDiagnosticsPath] = useState<string | null>(null);
+  const [hostActionMessage, setHostActionMessage] = useState<{
+    target: "logs" | "diagnostics";
+    message: string;
+  } | null>(null);
+  const [hostActionBusy, setHostActionBusy] =
+    useState<"logs" | "diagnostics" | null>(null);
+  const hostApi = getHostApi();
+  const engineState = isRestarting
+    ? tx("settings.values.restartingEngine", "Restarting")
+    : settings.apply_state?.status === "pending"
+      ? tx("settings.values.pending", "Pending")
+      : tx("settings.values.ready", "Ready");
+  const runHostAction = async (
+    target: "logs" | "diagnostics",
+    action: () => Promise<string | void>,
+    successMessage: (result: string | void) => string,
+    failureMessage: string,
+  ) => {
+    if (!hostApi) {
+      setHostActionMessage({
+        target,
+        message: tx(
+          "settings.status.hostApiUnavailable",
+          "Host actions are only available inside the native app.",
+        ),
+      });
+      return;
+    }
+    setHostActionBusy(target);
+    setHostActionMessage(null);
+    try {
+      const result = await action();
+      setHostActionMessage({ target, message: successMessage(result) });
+    } catch {
+      setHostActionMessage({ target, message: failureMessage });
+    } finally {
+      setHostActionBusy(null);
+    }
+  };
   return (
     <div className="space-y-7">
       <section>
         <SettingsSectionTitle>{tx("settings.sections.identity", "Identity")}</SettingsSectionTitle>
         <SettingsGroup>
-          <SettingsRow title={tx("settings.rows.botName", "Bot name")} description={tx("settings.help.botName", "Shown in runtime surfaces that use the configured bot identity.")}>
+          <SettingsRow title={tx("settings.rows.botName", "Bot name")} description={tx("settings.help.botName", "Shown wherever nanobot uses a display name.")}>
             <Input
               value={form.botName}
               onChange={(event) => setForm((prev) => ({ ...prev, botName: event.target.value }))}
               className="h-8 w-[220px] rounded-full text-[13px]"
             />
           </SettingsRow>
-          <SettingsRow title={tx("settings.rows.botIcon", "Bot icon")} description={tx("settings.help.botIcon", "Short emoji or text shown beside the bot name.")}>
+          <SettingsRow title={tx("settings.rows.botIcon", "Bot icon")} description={tx("settings.help.botIcon", "Short emoji or text shown with the bot name.")}>
             <Input
               value={form.botIcon}
               onChange={(event) => setForm((prev) => ({ ...prev, botIcon: event.target.value }))}
               className="h-8 w-[120px] rounded-full text-center text-[13px]"
             />
           </SettingsRow>
-          <SettingsRow title={tx("settings.rows.timezone", "Timezone")} description={tx("settings.help.timezone", "IANA timezone used by runtime context and schedules.")}>
+          <SettingsRow title={tx("settings.rows.timezone", "Timezone")} description={tx("settings.help.timezone", "Used for schedules and time-aware replies.")}>
             <TimezonePicker
               value={form.timezone}
               onChange={(timezone) => setForm((prev) => ({ ...prev, timezone }))}
@@ -3625,8 +3963,16 @@ function RuntimeSettings({
             dirty={dirty}
             saving={saving}
             pendingRestart={requiresRestartPending}
-            dirtyMessage={tx("settings.status.restartAfterSaving", "Save changes, then restart when ready.")}
-            pendingMessage={tx("settings.status.savedRestartApply", "Saved. Restart when ready.")}
+            dirtyMessage={
+              isNativeHost
+                ? tx("settings.status.hostRestartAfterSaving", "Save changes and nanobot will restart its engine.")
+                : tx("settings.status.restartAfterSaving", "Save changes, then restart when ready.")
+            }
+            pendingMessage={
+              isNativeHost
+                ? tx("settings.status.hostRestartPending", "Saved. Restarting engine when ready.")
+                : tx("settings.status.savedRestartApply", "Saved. Restart when ready.")
+            }
             onSave={onSave}
             onRestart={onRestart}
             isRestarting={isRestarting}
@@ -3634,9 +3980,92 @@ function RuntimeSettings({
         </SettingsGroup>
       </section>
 
+      {isNativeHost ? (
+        <section>
+          <SettingsSectionTitle>{tx("settings.sections.nativeHost", "Native host")}</SettingsSectionTitle>
+          <SettingsGroup>
+            <ReadOnlyRow title={tx("settings.rows.engine", "Engine")} value={engineState} />
+            {settings.runtime_capabilities?.can_open_logs ? (
+              <SettingsRow
+                title={tx("settings.rows.logs", "Logs")}
+                description={
+                  hostActionMessage?.target === "logs"
+                    ? hostActionMessage.message
+                    : tx("settings.help.logs", "Open the native engine log folder.")
+                }
+              >
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    void runHostAction(
+                      "logs",
+                      () => hostApi!.openLogs(),
+                      () => tx("settings.status.logsOpened", "Opened logs folder."),
+                      tx("settings.status.logsOpenFailed", "Could not open logs folder."),
+                    )
+                  }
+                  disabled={hostActionBusy !== null}
+                  className="rounded-full"
+                >
+                  {hostActionBusy === "logs"
+                    ? tx("settings.actions.opening", "Opening...")
+                    : tx("settings.actions.open", "Open")}
+                </Button>
+              </SettingsRow>
+            ) : null}
+            {settings.runtime_capabilities?.can_export_diagnostics ? (
+              <SettingsRow
+                title={tx("settings.rows.diagnostics", "Diagnostics")}
+                description={
+                  hostActionMessage?.target === "diagnostics"
+                    ? hostActionMessage.message
+                    : diagnosticsPath
+                    ? diagnosticsPath
+                    : tx("settings.help.diagnostics", "Export a small runtime report for support.")
+                }
+              >
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    void runHostAction(
+                      "diagnostics",
+                      async () => {
+                        const path = await hostApi!.exportDiagnostics();
+                        setDiagnosticsPath(path);
+                        return path;
+                      },
+                      (path) =>
+                        t("settings.status.diagnosticsExported", {
+                          path: String(path ?? ""),
+                          defaultValue: "Diagnostics exported to {{path}}.",
+                        }),
+                      tx("settings.status.diagnosticsExportFailed", "Could not export diagnostics."),
+                    )
+                  }
+                  disabled={hostActionBusy !== null}
+                  className="rounded-full"
+                >
+                  {hostActionBusy === "diagnostics"
+                    ? tx("settings.actions.exporting", "Exporting...")
+                    : tx("settings.actions.export", "Export")}
+                </Button>
+              </SettingsRow>
+            ) : null}
+          </SettingsGroup>
+        </section>
+      ) : null}
+
       <section>
         <SettingsSectionTitle>{t("settings.sections.system")}</SettingsSectionTitle>
         <SettingsGroup>
+          <ReadOnlyRow
+            title={tx("settings.rows.gateway", "Gateway")}
+            value={`${settings.runtime.gateway_host}:${settings.runtime.gateway_port}`}
+          />
+          <ReadOnlyRow title={t("settings.rows.configPath")} value={settings.runtime.config_path} />
+          <ReadOnlyRow title={tx("settings.rows.workspacePath", "Default workspace")} value={settings.runtime.workspace_path} />
           {onRestart && !requiresRestartPending ? (
             <SettingsRow
               title={t("settings.rows.restart")}
@@ -3654,57 +4083,106 @@ function RuntimeSettings({
                 ) : (
                   <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
                 )}
-                {isRestarting ? t("app.system.restarting") : t("app.system.restart")}
+                {isRestarting ? restartingActionLabel : restartActionLabel}
               </Button>
             </SettingsRow>
           ) : null}
-          <ReadOnlyRow title={t("settings.rows.configPath")} value={settings.runtime.config_path} />
-          <ReadOnlyRow title={tx("settings.rows.workspacePath", "Workspace path")} value={settings.runtime.workspace_path} />
-          <ReadOnlyRow title={tx("settings.rows.heartbeat", "Heartbeat")} value={settings.runtime.heartbeat.enabled ? `${settings.runtime.heartbeat.interval_s}s` : tx("settings.values.disabled", "Disabled")} />
-          <ReadOnlyRow title={tx("settings.rows.dream", "Dream")} value={settings.runtime.dream.schedule} />
-          <ReadOnlyRow title={tx("settings.rows.unifiedSession", "Unified session")} value={settings.runtime.unified_session ? tx("settings.values.enabled", "Enabled") : tx("settings.values.disabled", "Disabled")} />
         </SettingsGroup>
       </section>
     </div>
   );
 }
 
-function AdvancedSettings({ settings }: { settings: SettingsPayload }) {
+function AdvancedSettings({
+  form,
+  dirty,
+  saving,
+  requiresRestartPending,
+  isNativeHostSurface,
+  onChangeForm,
+  onSave,
+  onRestart,
+  isRestarting,
+}: {
+  form: NetworkSafetySettingsUpdate;
+  dirty: boolean;
+  saving: boolean;
+  requiresRestartPending: boolean;
+  isNativeHostSurface: boolean;
+  onChangeForm: Dispatch<SetStateAction<NetworkSafetySettingsUpdate>>;
+  onSave: () => void;
+  onRestart?: () => void;
+  isRestarting?: boolean;
+}) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
   return (
     <div className="space-y-7">
       <section>
-        <SettingsSectionTitle>{tx("settings.sections.safety", "Safety")}</SettingsSectionTitle>
+        <SettingsSectionTitle>
+          {isNativeHostSurface
+            ? tx("settings.sections.hostSafety", "App safety")
+            : tx("settings.sections.webuiSafety", "Web safety")}
+        </SettingsSectionTitle>
         <SettingsGroup>
-          <ReadOnlyRow title={tx("settings.rows.restrictWorkspace", "Restrict to workspace")} value={settings.advanced.restrict_to_workspace ? tx("settings.values.enabled", "Enabled") : tx("settings.values.disabled", "Disabled")} />
-          <ReadOnlyRow title={tx("settings.rows.execTool", "Exec tool")} value={settings.advanced.exec_enabled ? tx("settings.values.enabled", "Enabled") : tx("settings.values.disabled", "Disabled")} />
-          <ReadOnlyRow title={tx("settings.rows.execSandbox", "Exec sandbox")} value={settings.advanced.exec_sandbox ?? tx("settings.values.notAvailable", "Not available")} />
-          <ReadOnlyRow title={tx("settings.rows.ssrfWhitelist", "SSRF whitelist")} value={String(settings.advanced.ssrf_whitelist_count)} />
+          <SettingsRow
+            title={tx("settings.rows.localServiceAccess", "Local Service Access")}
+            description={tx(
+              isNativeHostSurface ? "settings.help.localServiceAccessNative" : "settings.help.localServiceAccess",
+              isNativeHostSurface
+                ? "Allow Full Access shell commands to reach services on this Mac."
+                : "Allow Full Access shell commands to reach localhost services.",
+            )}
+          >
+            <ToggleButton
+              checked={form.webuiAllowLocalServiceAccess}
+              onChange={(webuiAllowLocalServiceAccess) =>
+                onChangeForm((prev) => ({ ...prev, webuiAllowLocalServiceAccess }))
+              }
+              ariaLabel={tx("settings.rows.localServiceAccess", "Local Service Access")}
+              label={form.webuiAllowLocalServiceAccess ? tx("settings.values.on", "On") : tx("settings.values.off", "Off")}
+            />
+          </SettingsRow>
+          <SettingsRow
+            title={tx("settings.rows.webuiDefaultAccess", "Default access")}
+            description={tx(
+              isNativeHostSurface ? "settings.help.webuiDefaultAccessNative" : "settings.help.webuiDefaultAccess",
+              isNativeHostSurface
+                ? "Used by native chats without a project-specific permission."
+                : "Used by web chats without a project-specific permission.",
+            )}
+          >
+            <SegmentedControl
+              value={form.webuiDefaultAccessMode}
+              options={[
+                { value: "default", label: tx("settings.values.defaultPermission", "Default Permission") },
+                { value: "full", label: tx("settings.values.fullAccess", "Full Access") },
+              ]}
+              onChange={(webuiDefaultAccessMode) =>
+                onChangeForm((prev) => ({
+                  ...prev,
+                  webuiDefaultAccessMode: webuiDefaultAccessMode as WebuiDefaultAccessMode,
+                }))
+              }
+            />
+          </SettingsRow>
+          <RestartSettingsFooter
+            dirty={dirty}
+            saving={saving}
+            pendingRestart={requiresRestartPending}
+            onSave={onSave}
+            onRestart={onRestart}
+            isRestarting={isRestarting}
+          />
         </SettingsGroup>
       </section>
 
-      <section>
-        <SettingsSectionTitle>{tx("settings.sections.integrations", "Integrations")}</SettingsSectionTitle>
-        <SettingsGroup>
-          <ReadOnlyRow title={tx("settings.rows.mcpServers", "MCP servers")} value={String(settings.advanced.mcp_server_count)} />
-          <ReadOnlyRow title={tx("settings.rows.pathAppend", "PATH append")} value={settings.advanced.exec_path_append_set ? tx("settings.values.configured", "Configured") : tx("settings.values.notConfigured", "Not configured")} />
-          <SettingsRow
-            title={tx("settings.rows.configurationDocs", "Configuration docs")}
-            description={tx("settings.help.advancedReadOnly", "Advanced safety controls are read-only in WebUI. Edit config.json intentionally when needed.")}
-          >
-            <a
-              className="inline-flex h-8 items-center rounded-full border border-input bg-background px-3 text-[13px] font-medium text-foreground shadow-sm transition-colors hover:bg-muted"
-              href="https://github.com/HKUDS/nanobot/blob/main/docs/configuration.md"
-              target="_blank"
-              rel="noreferrer"
-            >
-              <Info className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-              {tx("settings.actions.openDocs", "Open docs")}
-            </a>
-          </SettingsRow>
-        </SettingsGroup>
-      </section>
+      <p className="max-w-3xl px-1 text-sm leading-6 text-muted-foreground">
+        {tx(
+          "settings.help.securityManagedControls",
+          "Web fetches always protect local, private, and metadata services. Core channel safety stays in config.json.",
+        )}
+      </p>
     </div>
   );
 }
@@ -3739,7 +4217,7 @@ function TimezonePicker({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
-        className="w-[340px] max-w-[calc(100vw-2rem)] rounded-[18px] border-border/65 bg-popover p-1.5 text-popover-foreground shadow-[0_18px_55px_rgba(15,23,42,0.18)] dark:border-white/10 dark:shadow-[0_22px_55px_rgba(0,0,0,0.45)]"
+        className="w-[340px] max-w-[calc(100vw-2rem)]"
       >
         <div className="sticky top-0 z-10 bg-popover px-1 pb-1">
           <div className="flex h-9 items-center gap-2 rounded-full border border-input bg-background px-3">
@@ -3754,7 +4232,10 @@ function TimezonePicker({
             />
           </div>
         </div>
-        <div className="mt-1 max-h-[18rem] overflow-y-auto pr-0.5" data-testid="timezone-picker-list">
+        <div
+          className="mt-1 max-h-[18rem] overflow-y-auto pr-0.5 scrollbar-thin scrollbar-track-transparent"
+          data-testid="timezone-picker-list"
+        >
           {filteredOptions.length ? (
             filteredOptions.map((option) => {
               const selected = option.name === value;
@@ -3806,7 +4287,7 @@ function ProviderPicker({
   const disabled = providers.length === 0;
 
   return (
-    <DropdownMenu>
+    <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild disabled={disabled}>
         <Button
           type="button"
@@ -3832,7 +4313,7 @@ function ProviderPicker({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
-        className="max-h-[18rem] w-[240px] overflow-y-auto rounded-[18px] border-border/65 bg-popover p-1.5 text-popover-foreground shadow-[0_18px_55px_rgba(15,23,42,0.18)] dark:border-white/10 dark:shadow-[0_22px_55px_rgba(0,0,0,0.45)]"
+        className="max-h-[18rem] w-[240px] overflow-y-auto scrollbar-thin scrollbar-track-transparent"
       >
         {providers.map((provider) => {
           const selected = provider.name === value;
@@ -3862,6 +4343,239 @@ function ProviderPicker({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+function ModelIdPicker({
+  token,
+  settings,
+  provider,
+  value,
+  showProviderLogos,
+  onChange,
+}: {
+  token: string;
+  settings: SettingsPayload;
+  provider: string;
+  value: string;
+  showProviderLogos: boolean;
+  onChange: (model: string) => void;
+}) {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [payload, setPayload] = useState<ProviderModelsPayload | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const effectiveProvider =
+    provider === "auto" ? settings.agent.resolved_provider ?? provider : provider;
+  const canFetchModels = Boolean(effectiveProvider && effectiveProvider !== "auto");
+  const normalizedQuery = query.trim().toLowerCase();
+  const providerModels = payload?.models ?? [];
+  const visibleModels = providerModels
+    .filter((model) => {
+      if (!normalizedQuery) return true;
+      return [model.id, model.label ?? "", model.owned_by ?? ""]
+        .some((field) => field.toLowerCase().includes(normalizedQuery));
+    })
+    .slice(0, 80);
+  const isCatalog = payload?.catalog_kind === "catalog";
+  const defersModelList = DEFERRED_MODEL_LIST_PROVIDERS.has(effectiveProvider);
+  const hasDeferredSearchQuery =
+    normalizedQuery.length >= DEFERRED_MODEL_LIST_QUERY_MIN_LENGTH;
+  const shouldFetchModels =
+    canFetchModels && (!defersModelList || hasDeferredSearchQuery);
+  const waitingForModelSearch =
+    open && canFetchModels && defersModelList && !hasDeferredSearchQuery;
+  const hasModelList = payload?.status === "available";
+  const showModels = Boolean(hasModelList && payload && (!isCatalog || normalizedQuery));
+  const customCandidate = query.trim();
+  const exactQueryMatch = providerModels.some((model) => model.id === customCandidate);
+  const providerModelCount = payload?.model_count ?? providerModels.length;
+
+  useEffect(() => {
+    if (!open) return;
+    setQuery("");
+  }, [open, effectiveProvider]);
+
+  useEffect(() => {
+    if (!open || !shouldFetchModels) {
+      setPayload(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setPayload(null);
+    setError(null);
+    setLoading(true);
+    fetchProviderModels(token, effectiveProvider)
+      .then((nextPayload) => {
+        if (!cancelled) setPayload(nextPayload);
+      })
+      .catch((err) => {
+        if (!cancelled) setError((err as Error).message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveProvider, open, shouldFetchModels, token]);
+
+  const selectModel = (model: string) => {
+    onChange(model);
+    setOpen(false);
+  };
+
+  const renderModelRow = (
+    model: ProviderModelsPayload["models"][number],
+    options: { selected?: boolean } = {},
+  ) => (
+    <DropdownMenuItem
+      key={model.id}
+      onSelect={() => selectModel(model.id)}
+      className={cn(
+        "flex cursor-default items-center justify-between gap-2 rounded-[12px] px-2 py-1.5 text-[12px]",
+        "focus:bg-muted/85 focus:text-foreground",
+        options.selected && "bg-muted/80 text-foreground focus:bg-muted",
+      )}
+    >
+      <span className="flex min-w-0 items-center gap-2">
+        <ProviderPickerIcon provider={effectiveProvider} showBrandLogos={showProviderLogos} />
+        <span className="min-w-0 truncate font-medium text-foreground">
+          {model.label ?? model.id}
+        </span>
+      </span>
+      <span className="ml-2 flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
+        {model.context_window ? <span>{formatContextWindow(model.context_window)}</span> : null}
+        {options.selected ? <Check className="h-3.5 w-3.5 text-foreground" aria-hidden /> : null}
+      </span>
+    </DropdownMenuItem>
+  );
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          className={cn(
+            "h-9 w-[min(360px,70vw)] justify-between rounded-full border-input bg-background px-3 text-[12px] font-normal shadow-none",
+            "hover:bg-accent/55 focus-visible:ring-2 focus-visible:ring-ring",
+          )}
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            <ProviderPickerIcon provider={effectiveProvider} showBrandLogos={showProviderLogos} />
+            <span
+              className={cn(
+                "min-w-0 truncate font-medium",
+                value ? "text-foreground" : "text-muted-foreground",
+              )}
+            >
+              {value || tx("settings.models.selectModel", "Select model")}
+            </span>
+          </span>
+          <ChevronDown className="ml-2 h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        className="w-[360px] max-w-[calc(100vw-2rem)] p-1.5"
+      >
+        <div className="p-1 pb-1.5">
+          <div className="relative">
+            <Search
+              className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+              aria-hidden
+            />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => event.stopPropagation()}
+              placeholder={tx("settings.models.searchModels", "Search or type model ID")}
+              className="h-8 rounded-full pl-8 pr-3 text-[12px]"
+            />
+          </div>
+        </div>
+
+        {!canFetchModels ? (
+          <div className="px-2 py-1.5 text-[11px] leading-4 text-muted-foreground">
+            {tx("settings.models.autoProviderCustomOnly", "Auto provider mode uses custom model IDs.")}
+          </div>
+        ) : waitingForModelSearch ? (
+          <div className="px-2 py-1.5 text-[11px] leading-4 text-muted-foreground">
+            {tx("settings.models.searchCatalog", "Search provider catalog to choose a model.")}
+          </div>
+        ) : loading ? (
+          <div className="flex items-center gap-2 px-2 py-1.5 text-[11px] text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+            {tx("settings.models.loadingModels", "Loading models...")}
+          </div>
+        ) : error || payload?.status === "error" ? (
+          <div className="px-2 py-1.5 text-[11px] leading-4 text-muted-foreground">
+            {payload?.message || error || tx("settings.models.loadFailed", "Model list unavailable.")}
+          </div>
+        ) : payload?.status === "not_configured" ? (
+          <div className="px-2 py-1.5 text-[11px] leading-4 text-muted-foreground">
+            {tx("settings.models.providerNotConfigured", "Configure this provider before loading models.")}
+          </div>
+        ) : payload?.status === "unsupported" || payload?.status === "missing_api_base" ? (
+          <div className="px-2 py-1.5 text-[11px] leading-4 text-muted-foreground">
+            {payload.message || tx("settings.models.unsupportedModelList", "Type a model ID manually.")}
+          </div>
+        ) : isCatalog && !normalizedQuery ? (
+          <div className="px-2 py-1.5 text-[11px] leading-4 text-muted-foreground">
+            {tx("settings.models.searchCatalog", "Search provider catalog to choose a model.")}
+            {providerModelCount ? ` ${providerModelCount} ${tx("settings.models.modelsAvailable", "available")}.` : ""}
+          </div>
+        ) : null}
+
+        {showModels && visibleModels.length ? (
+          <div className="max-h-[16rem] overflow-y-auto pr-0.5 scrollbar-thin scrollbar-track-transparent">
+            {visibleModels.map((model) =>
+              renderModelRow(model, { selected: model.id === value }),
+            )}
+          </div>
+        ) : showModels ? (
+          <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
+            {tx("settings.models.noModelResults", "No matching models.")}
+          </div>
+        ) : null}
+
+        {customCandidate && !exactQueryMatch && customCandidate !== value ? (
+          <>
+            {showModels ? <DropdownMenuSeparator /> : null}
+            <DropdownMenuItem
+              onSelect={() => selectModel(customCandidate)}
+              className="flex cursor-default items-center gap-2 rounded-[12px] px-2 py-1.5 text-[12px] focus:bg-muted/85"
+            >
+              <span className="grid h-5 w-5 shrink-0 place-items-center rounded-md bg-muted/80 text-muted-foreground">
+                <Pencil className="h-3 w-3" aria-hidden />
+              </span>
+              <span className="min-w-0 truncate">
+                {tx("settings.models.useCustomModel", "Use")}{" "}
+                <span className="font-medium text-foreground">“{customCandidate}”</span>
+              </span>
+            </DropdownMenuItem>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function formatContextWindow(tokens: number): string {
+  if (tokens >= 1_000_000) {
+    const value = tokens / 1_000_000;
+    return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}M`;
+  }
+  if (tokens >= 1_000) {
+    const value = tokens / 1_000;
+    return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}K`;
+  }
+  return String(tokens);
 }
 
 function ProviderPickerIcon({
@@ -3989,6 +4703,17 @@ function orderUnconfiguredProviders(
     .map(({ provider }) => provider);
 }
 
+function uniqueProviders(
+  providers: SettingsPayload["providers"],
+): SettingsPayload["providers"] {
+  const seen = new Set<string>();
+  return providers.filter((provider) => {
+    if (seen.has(provider.name)) return false;
+    seen.add(provider.name);
+    return true;
+  });
+}
+
 function providerVisibilityRank(provider: SettingsPayload["providers"][number]): number {
   const localRank = LOCAL_UNCONFIGURED_PROVIDER_ORDER.get(provider.name);
   if (localRank !== undefined) return localRank;
@@ -4030,7 +4755,7 @@ function timezonesWithCurrent(current: string): string[] {
   const intl = Intl as typeof Intl & {
     supportedValuesOf?: (key: "timeZone") => string[];
   };
-  let values: string[] = [];
+  let values: string[];
   try {
     values = intl.supportedValuesOf?.("timeZone") ?? [];
   } catch {
@@ -4341,9 +5066,17 @@ function SettingsRow({
   );
 }
 
-function ReadOnlyRow({ title, value }: { title: string; value: string }) {
+function ReadOnlyRow({
+  title,
+  value,
+  description,
+}: {
+  title: string;
+  value: string;
+  description?: string;
+}) {
   return (
-    <SettingsRow title={title}>
+    <SettingsRow title={title} description={description}>
       <span className="block max-w-[320px] truncate text-right text-[13px] text-muted-foreground">
         {value}
       </span>
@@ -4375,11 +5108,12 @@ function ModelPresetPicker({
   const selectedPreset = presets.find((preset) => preset.name === value) ?? presets[0] ?? null;
 
   return (
-    <DropdownMenu>
+    <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild disabled={!presets.length}>
         <Button
           type="button"
           variant="outline"
+          aria-label={tx("settings.rows.currentModel", "Current configuration")}
           disabled={!presets.length}
           className={cn(
             "h-12 w-[min(430px,72vw)] justify-between rounded-full border-input bg-background px-3.5 text-[13px] font-normal shadow-none",
@@ -4405,7 +5139,7 @@ function ModelPresetPicker({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
-        className="max-h-[20rem] w-[430px] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-[18px] border-border/65 bg-popover p-1.5 text-popover-foreground shadow-[0_18px_55px_rgba(15,23,42,0.18)] dark:border-white/10 dark:shadow-[0_22px_55px_rgba(0,0,0,0.45)]"
+        className="max-h-[20rem] w-[430px] max-w-[calc(100vw-2rem)] overflow-y-auto scrollbar-thin scrollbar-track-transparent"
       >
         {presets.map((preset) => {
           const selected = preset.name === value;
@@ -4432,7 +5166,9 @@ function ModelPresetPicker({
         })}
         <div className="mt-1 border-t border-border/55 pt-1">
           <DropdownMenuItem
-            onSelect={onCreateConfiguration}
+            onSelect={() => {
+              window.setTimeout(onCreateConfiguration, 0);
+            }}
             className={cn(
               "flex cursor-default items-center gap-2 rounded-[12px] px-2.5 py-2 text-[13px] font-medium",
               "text-foreground focus:bg-muted/85 focus:text-foreground",
@@ -4515,6 +5251,13 @@ function RestartSettingsFooter({
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const isNativeHost = getHostApi() !== null;
+  const restartLabel = isNativeHost
+    ? tx("app.system.restartEngine", "Restart engine")
+    : t("app.system.restart");
+  const restartingLabel = isNativeHost
+    ? tx("app.system.restartingEngine", "Restarting engine...")
+    : t("app.system.restarting");
   const statusMessage =
     message ??
     (pendingRestart && !dirty
@@ -4543,7 +5286,7 @@ function RestartSettingsFooter({
             ) : (
               <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
             )}
-            {isRestarting ? t("app.system.restarting") : t("app.system.restart")}
+            {isRestarting ? restartingLabel : restartLabel}
           </Button>
         ) : null}
         {onReset ? (
@@ -4575,29 +5318,33 @@ function SettingsFooter({
   dirty,
   saving,
   saved,
+  disabled = false,
+  message,
   onSave,
 }: {
   dirty: boolean;
   saving: boolean;
   saved: boolean;
+  disabled?: boolean;
+  message?: string;
   onSave: () => void;
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  const statusMessage = dirty
+  const statusMessage = message ?? (dirty
     ? t("settings.status.unsaved")
     : saved
       ? t("settings.status.savedRestart")
-      : tx("settings.status.upToDate", "Up to date.");
+      : tx("settings.status.upToDate", "Up to date."));
   return (
     <div className="flex min-h-[58px] flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
       <div className="text-[13px] text-muted-foreground">
-        <SettingsStatusMessage tone={dirty || saved ? "accent" : undefined}>
+        <SettingsStatusMessage tone={disabled ? "danger" : dirty || saved ? "accent" : undefined}>
           {statusMessage}
         </SettingsStatusMessage>
       </div>
       <div className="flex justify-end">
-        <Button size="sm" variant="outline" onClick={onSave} disabled={!dirty || saving} className="rounded-full">
+        <Button size="sm" variant="outline" onClick={onSave} disabled={!dirty || disabled || saving} className="rounded-full">
           {saving ? t("settings.actions.saving") : t("settings.actions.save")}
         </Button>
       </div>

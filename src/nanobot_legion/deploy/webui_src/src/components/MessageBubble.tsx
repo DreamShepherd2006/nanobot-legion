@@ -6,14 +6,17 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Check, ChevronRight, Copy, FileIcon, ImageIcon, PlaySquare, Sparkles, Wrench } from "lucide-react";
+import { Check, ChevronRight, Copy, ImageIcon, Sparkles, Wrench } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { AttachmentTile } from "@/components/AttachmentTile";
 import { CliAppMentionText } from "@/components/CliAppMentionText";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
 import { cn } from "@/lib/utils";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { formatTurnLatency } from "@/lib/format";
+import { toMediaAttachment } from "@/lib/media";
 import type {
   CliAppInfo,
   McpPresetInfo,
@@ -69,8 +72,8 @@ export function MessageBubble({
   }, []);
 
   const onCopyAssistantReply = useCallback(() => {
-    if (!navigator.clipboard) return;
-    void navigator.clipboard.writeText(message.content).then(() => {
+    void copyTextToClipboard(message.content).then((ok) => {
+      if (!ok) return;
       setCopied(true);
       if (copyResetRef.current !== null) {
         window.clearTimeout(copyResetRef.current);
@@ -258,10 +261,11 @@ function MessageMedia({
   const images: UIImage[] = [];
   const nonImages: UIMediaAttachment[] = [];
   for (const item of media) {
-    if (item.kind === "image") {
-      images.push({ url: item.url, name: item.name });
+    const normalized = toMediaAttachment(item);
+    if (normalized.kind === "image") {
+      images.push({ url: normalized.url, name: normalized.name });
     } else {
-      nonImages.push(item);
+      nonImages.push(normalized);
     }
   }
 
@@ -276,69 +280,8 @@ function MessageMedia({
         <UserImages images={images} align={align} size={align === "left" ? "large" : "compact"} />
       ) : null}
       {nonImages.map((item, i) => (
-        <MediaCell key={`${item.url ?? item.name ?? item.kind}-${i}`} media={item} />
+        <AttachmentTile key={`${item.url ?? item.name ?? item.kind}-${i}`} attachment={item} />
       ))}
-    </div>
-  );
-}
-
-function MediaCell({ media }: { media: UIMediaAttachment }) {
-  const { t } = useTranslation();
-  const hasUrl = typeof media.url === "string" && media.url.length > 0;
-
-  if (media.kind === "video" && hasUrl) {
-    return (
-      <figure className="max-w-[min(100%,32rem)] overflow-hidden rounded-[14px] border border-border/60 bg-muted/40">
-        <video
-          src={media.url}
-          controls
-          preload="metadata"
-          className="block max-h-[26rem] w-full bg-black"
-          aria-label={media.name ? `${t("message.videoAttachment", { defaultValue: "Video attachment" })}: ${media.name}` : t("message.videoAttachment", { defaultValue: "Video attachment" })}
-        />
-        {media.name ? (
-          <figcaption className="truncate px-3 py-1.5 text-[11.5px] text-muted-foreground">
-            {media.name}
-          </figcaption>
-        ) : null}
-      </figure>
-    );
-  }
-
-  const label =
-    media.kind === "video"
-      ? t("message.videoAttachment", { defaultValue: "Video attachment" })
-      : t("message.fileAttachment", { defaultValue: "File attachment" });
-  const Icon = media.kind === "video" ? PlaySquare : FileIcon;
-
-  const inner = (
-    <>
-      <Icon className="h-4 w-4 flex-none" aria-hidden />
-      <span className="truncate">{media.name ?? label}</span>
-    </>
-  );
-
-  if (hasUrl) {
-    return (
-      <a
-        href={media.url}
-        download={media.name ?? label}
-        title={media.name ?? undefined}
-        aria-label={label}
-        className="flex max-w-[18rem] items-center gap-2 rounded-[14px] border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground hover:underline"
-      >
-        {inner}
-      </a>
-    );
-  }
-
-  return (
-    <div
-      className="flex max-w-[18rem] items-center gap-2 rounded-[14px] border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
-      title={media.name ?? undefined}
-      aria-label={label}
-    >
-      {inner}
     </div>
   );
 }
@@ -630,7 +573,7 @@ export function ReasoningBubble({
               "prose-headings:mt-2 prose-headings:mb-1 prose-headings:font-medium",
               "prose-headings:text-muted-foreground/92 prose-strong:text-muted-foreground",
               "prose-h1:text-[15px] prose-h2:text-[13.5px] prose-h3:text-[12.5px] prose-h4:text-[12px]",
-              "prose-a:text-muted-foreground/95 prose-a:underline hover:prose-a:opacity-90",
+              "prose-a:text-blue-500 prose-a:underline hover:prose-a:text-blue-600 dark:prose-a:text-blue-300 dark:hover:prose-a:text-blue-200",
               "prose-code:text-[0.92em]",
             )}
           >
