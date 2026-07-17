@@ -693,11 +693,15 @@ def _find_archived_agents(squad_cfg: dict) -> list[dict]:
         return {"name": name, "timestamp": ts, "dir_name": entry,
                 "provider": provider, "model": model, "zone": zone}
 
-    # Tier 1: peers with zone="archived" (must have matching directory)
+    # Tier 1: peers with zone="archived"
     for name in sorted(archived_peer_names):
         entry = dir_map.get(name)
         if entry:
             archived.append(_build_entry(name, entry, "archived"))
+        else:
+            # No matching .removed.* dir (e.g. from previous tests) — show with empty metadata
+            archived.append({"name": name, "timestamp": "", "dir_name": "",
+                            "provider": "", "model": "", "zone": "archived"})
 
     # Tier 2: orphan .removed.* dirs not in peers → write back zone="archived"
     needs_save = False
@@ -1092,7 +1096,7 @@ def create_agent_routes(app, gatekeeper):
 
         if os.path.exists(agent_dir):
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            archived_dir = os.path.join(data_root, "legion", "instances", f"{name}.removed.{ts}")
+            archived_dir = os.path.join(data_root, "instances", f"{name}.removed.{ts}")
             moved = False
             try:
                 shutil.move(agent_dir, archived_dir)
