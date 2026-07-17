@@ -1233,10 +1233,10 @@ def create_agent_routes(app, gatekeeper):
                 gw_int, ws_int = _allocate_ports(peers)
                 # Also update the agent's own config.json with re-allocated ports
                 _patch_agent_config_port(dst_dir, gw_int, ws_int)
-            peers[name] = {"id": f"squad:{name}", "gateway_port": gw_int, "ws_port": ws_int}
+            peers[name] = {"id": f"squad:{name}", "gateway_port": gw_int, "ws_port": ws_int, "zone": "active"}
         else:
             gw, ws = _allocate_ports(peers)
-            peers[name] = {"id": f"squad:{name}", "gateway_port": gw, "ws_port": ws}
+            peers[name] = {"id": f"squad:{name}", "gateway_port": gw, "ws_port": ws, "zone": "active"}
 
         # Add to resurrection whitelist
         whitelist = list(squad_cfg.get("resurrection_whitelist", ["neo"]))
@@ -1348,10 +1348,10 @@ def create_agent_routes(app, gatekeeper):
             pass
 
         peers = squad_cfg.get("peers", {})
-        if name in peers:
+        if name in peers and peers[name].get("zone", "active") != "archived":
             return JSONResponse({
                 "ok": False,
-                "error": f"Agent '{name}' 已在 peers 列表中（可能已恢复）"
+                "error": f"Agent '{name}' 已在活跃列表中（可能已恢复）"
             }, status_code=409)
 
         if isinstance(gw, (int, float)) and gw > 0 and isinstance(ws, (int, float)) and ws > 0:
@@ -1366,10 +1366,10 @@ def create_agent_routes(app, gatekeeper):
             if gw_int in used_ports or ws_int in used_ports:
                 gw_int, ws_int = _allocate_ports(peers)
                 _patch_agent_config_port(dst_dir, gw_int, ws_int)
-            peers[name] = {"id": f"squad:{name}", "gateway_port": gw_int, "ws_port": ws_int}
+            peers[name] = {"id": f"squad:{name}", "gateway_port": gw_int, "ws_port": ws_int, "zone": "active"}
         else:
             gw, ws = _allocate_ports(peers)
-            peers[name] = {"id": f"squad:{name}", "gateway_port": gw, "ws_port": ws}
+            peers[name] = {"id": f"squad:{name}", "gateway_port": gw, "ws_port": ws, "zone": "active"}
 
         whitelist = list(squad_cfg.get("resurrection_whitelist", ["neo"]))
         if not isinstance(whitelist, list):
