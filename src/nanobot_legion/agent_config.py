@@ -1193,8 +1193,8 @@ def create_agent_routes(app, gatekeeper):
                     })
 
         peers = squad_cfg.get("peers", {})
-        if name in peers:
-            return JSONResponse({"ok": False, "error": f"Agent '{name}' 已在 peers 列表中"}, status_code=409)
+        if name in peers and peers[name].get("zone", "active") != "archived":
+            return JSONResponse({"ok": False, "error": f"Agent '{name}' 已在活跃列表中"}, status_code=409)
 
         # Read archived config for port info
         gw = 0
