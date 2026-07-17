@@ -752,6 +752,9 @@ def _render_running_table(squad_cfg: dict, running: dict[str, bool]) -> str:
 
     rows = []
     for name, info in sorted(peers.items()):
+        # Skip archived agents (zone=="archived")
+        if info.get("zone") == "archived":
+            continue
         gw = info.get("gateway_port", "?")
         ws = info.get("ws_port", "?")
         is_cmd = info.get("id") == "squad:commander"
@@ -835,13 +838,7 @@ def _kill_agent_process(gw_port: int) -> list[int]:
 
 
 def _sync_roster(gatekeeper, squad_cfg: dict):
-    """Refresh gatekeeper roster from squad_config.json peers after config change.
-
-    Updates the in-memory cache so gatekeeper._refresh_roster() (which calls
-    load_config without force_reload) sees the latest squad_config data.
-    """
-    import nanobot_legion.squad_config_loader as _scl
-    _scl.squad_config_cache = squad_cfg
+    """Refresh gatekeeper roster from squad_config.json peers after config change."""
     gatekeeper._refresh_roster()
     gatekeeper._init_http_pool()
 
