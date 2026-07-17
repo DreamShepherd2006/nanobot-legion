@@ -835,7 +835,13 @@ def _kill_agent_process(gw_port: int) -> list[int]:
 
 
 def _sync_roster(gatekeeper, squad_cfg: dict):
-    """Refresh gatekeeper roster from squad_config.json peers after config change."""
+    """Refresh gatekeeper roster from squad_config.json peers after config change.
+
+    Updates the in-memory cache so gatekeeper._refresh_roster() (which calls
+    load_config without force_reload) sees the latest squad_config data.
+    """
+    import nanobot_legion.squad_config_loader as _scl
+    _scl.squad_config_cache = squad_cfg
     gatekeeper._refresh_roster()
     gatekeeper._init_http_pool()
 
