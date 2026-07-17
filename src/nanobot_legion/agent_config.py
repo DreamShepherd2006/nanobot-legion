@@ -659,7 +659,7 @@ def _find_archived_agents(squad_cfg: dict) -> list[dict]:
     """
     data_root = squad_cfg.get("data_root", "/data")
     peers = squad_cfg.get("peers", {})
-    instances_dir = os.path.join(data_root, "legion", "instances")
+    instances_dir = os.path.join(data_root, "instances")
 
     archived = []
     active_names: set[str] = set()
@@ -1068,7 +1068,7 @@ def create_agent_routes(app, gatekeeper):
 
         # Archive agent directory — kill process first to release file handles
         data_root = squad_cfg.get("data_root", "/data")
-        agent_dir = os.path.join(data_root, "legion", "instances", name)
+        agent_dir = os.path.join(data_root, "instances", name)
 
         gw_port = info.get("gateway_port", 0)
         if gw_port:
