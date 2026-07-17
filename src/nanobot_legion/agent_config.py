@@ -1057,6 +1057,14 @@ def create_agent_routes(app, gatekeeper):
         info["zone"] = "archived"
         squad_cfg["peers"] = peers
 
+        # Remove from resurrection whitelist — archived agents shouldn't auto-resurrect
+        whitelist = squad_cfg.get("resurrection_whitelist", [])
+        if name in whitelist:
+            whitelist.remove(name)
+            squad_cfg["resurrection_whitelist"] = whitelist
+            if name != "neo":
+                print(f"[agent_config] 🧹 '{name}' 已从复活白名单移除", flush=True)
+
         # Persist squad_config.json
         try:
             save_config(squad_cfg)
