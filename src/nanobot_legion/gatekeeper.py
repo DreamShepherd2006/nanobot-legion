@@ -389,6 +389,9 @@ Agent 生成的输出文件存放在此，可随时下载。
         peers = cfg.get("peers", {})
         for name, info in peers.items():
             if isinstance(info, dict) and "gateway_port" in info:
+                # zone filter: only active agents (missing zone → active)
+                if info.get("zone", "active") != "active":
+                    continue
                 self.agent_names.append(name)
                 self.squad_roster[name] = {
                     "id": info.get("id", f"squad:{name}"),
