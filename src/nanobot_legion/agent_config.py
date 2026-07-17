@@ -1017,8 +1017,8 @@ def create_agent_routes(app, gatekeeper):
                 status_code=403,
             )
 
-        # Remove from peers
-        del peers[name]
+        # Set zone=archived instead of deleting from peers
+        info["zone"] = "archived"
         squad_cfg["peers"] = peers
 
         # Persist squad_config.json
@@ -1032,7 +1032,7 @@ def create_agent_routes(app, gatekeeper):
 
         # Archive agent directory — kill process first to release file handles
         data_root = squad_cfg.get("data_root", "/data")
-        agent_dir = os.path.join(data_root, "instances", name)
+        agent_dir = os.path.join(data_root, "legion", "instances", name)
 
         gw_port = info.get("gateway_port", 0)
         if gw_port:
@@ -1060,7 +1060,7 @@ def create_agent_routes(app, gatekeeper):
 
         if os.path.exists(agent_dir):
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            archived_dir = os.path.join(data_root, "instances", f"{name}.removed.{ts}")
+            archived_dir = os.path.join(data_root, "legion", "instances", f"{name}.removed.{ts}")
             moved = False
             try:
                 shutil.move(agent_dir, archived_dir)
@@ -1072,7 +1072,7 @@ def create_agent_routes(app, gatekeeper):
                     shutil.rmtree(agent_dir)
                     moved = True
                 except OSError as e2:
-                    print(f"[agent_config] ⚠️  归档 '{name}' 目录失败: {e2}，已移除 peer", flush=True)
+                    print(f"[agent_config] ⚠️  归档 '{name}' 目录失败: {e2}，已设置 zone=archived", flush=True)
             if moved:
                 print(f"[agent_config] 📦 Agent '{name}' 已归档 → {archived_dir}", flush=True)
         else:
