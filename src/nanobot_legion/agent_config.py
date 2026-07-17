@@ -639,56 +639,84 @@ def _detect_running_agents(squad_cfg: dict) -> dict[str, bool]:
     return running
 
 
-def _find_archived_agents(squad_cfg: dict) -> list[dict]:
-    """Find archived agent directories (.removed.*) and return metadata list.
+def _read_agent_metadata(config_path: str) -> tuple[str, str]:
+    """Read provider and model from an agent's config.json. Returns ('', '') on failure."""
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+        agents = cfg.get("agents", {})
+        defaults = agents.get("defaults", {}) if isinstance(agents, dict) else {}
+        return defaults.get("provider", ""), defaults.get("model", "")
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return "", ""
 
-    Filters out agents that are already in the active peers list.
+
+def _find_archived_agents(squad_cfg: dict) -> list[dict]:
+    """Find archived agents from peers (zone=archived) and orphan .removed.* dirs.
+
+    Tier 1: peers with zone="archived" → matched .removed.* directory.
+    Tier 2: orphan .removed.* directories not in peers → write back zone="archived".
     """
     data_root = squad_cfg.get("data_root", "/data")
     peers = squad_cfg.get("peers", {})
-    active_names = set(peers.keys())
-    instances_dir = os.path.join(data_root, "instances")
+    instances_dir = os.path.join(data_root, "legion", "instances")
+
     archived = []
+    active_names: set[str] = set()
+    archived_peer_names: set[str] = set()
+
+    for name, info in peers.items():
+        zone = info.get("zone", "active") if isinstance(info, dict) else "active"
+        if zone == "archived":
+            archived_peer_names.add(name)
+        else:
+            active_names.add(name)
+
+    # Scan directory: build .removed.* → name map
+    dir_map: dict[str, str] = {}  # agent_name → dir_name
     try:
         for entry in os.listdir(instances_dir):
             if ".removed." not in entry:
                 continue
-            dir_path = os.path.join(instances_dir, entry)
-            if not os.path.isdir(dir_path):
+            if not os.path.isdir(os.path.join(instances_dir, entry)):
                 continue
-            # Parse: name.removed.timestamp → name
             parts = entry.split(".removed.", 1)
-            if len(parts) != 2:
-                continue
-            orig_name = parts[0]
-            ts_str = parts[1]
-
-            # Try to read config.json for metadata
-            provider = ""
-            model = ""
-            config_path = os.path.join(dir_path, "config.json")
-            try:
-                with open(config_path) as f:
-                    cfg = json.load(f)
-                agents = cfg.get("agents", {})
-                defaults = agents.get("defaults", {}) if isinstance(agents, dict) else {}
-                provider = defaults.get("provider", "")
-                model = defaults.get("model", "")
-            except (FileNotFoundError, json.JSONDecodeError):
-                pass
-
-            archived.append({
-                "name": orig_name,
-                "timestamp": ts_str,
-                "dir_name": entry,
-                "provider": provider,
-                "model": model,
-            })
+            if len(parts) == 2:
+                dir_map[parts[0]] = entry
     except OSError:
         pass
 
-    # Filter out agents already in active peers
-    archived = [a for a in archived if a["name"] not in active_names]
+    def _build_entry(name: str, entry: str, zone: str = "archived") -> dict:
+        config_path = os.path.join(instances_dir, entry, "config.json")
+        provider, model = _read_agent_metadata(config_path)
+        ts = entry.split(".removed.", 1)[1] if ".removed." in entry else ""
+        return {"name": name, "timestamp": ts, "dir_name": entry,
+                "provider": provider, "model": model, "zone": zone}
+
+    # Tier 1: peers with zone="archived" (must have matching directory)
+    for name in sorted(archived_peer_names):
+        entry = dir_map.get(name)
+        if entry:
+            archived.append(_build_entry(name, entry, "archived"))
+
+    # Tier 2: orphan .removed.* dirs not in peers → write back zone="archived"
+    needs_save = False
+    for name in sorted(dir_map):
+        if name in archived_peer_names or name in active_names:
+            continue
+        entry = dir_map[name]
+        archived.append(_build_entry(name, entry, "legacy"))
+        # Write back to peers
+        info = peers.get(name)
+        if isinstance(info, dict):
+            info["zone"] = "archived"
+        else:
+            peers[name] = {"id": f"squad:{name}", "gateway_port": 0, "zone": "archived"}
+        needs_save = True
+
+    if needs_save:
+        squad_cfg["peers"] = peers
+        save_config(squad_cfg)
 
     archived.sort(key=lambda x: x.get("name", ""))
     return archived
@@ -704,6 +732,10 @@ def _render_running_table(squad_cfg: dict, running: dict[str, bool]) -> str:
 
     rows = []
     for name, info in sorted(peers.items()):
+        if not isinstance(info, dict):
+            continue
+        if info.get("zone", "active") != "active":
+            continue
         gw = info.get("gateway_port", "?")
         ws = info.get("ws_port", "?")
         is_cmd = info.get("id") == "squad:commander"
