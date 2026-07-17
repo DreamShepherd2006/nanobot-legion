@@ -380,7 +380,10 @@ Agent 生成的输出文件存放在此，可随时下载。
     # ═══════════════════════════════════════════════════════════
 
     def _refresh_roster(self):
-        """Read squad_config.json peers to build agent roster."""
+        """Read squad_config.json peers — only load active agents (zone != \"archived\").
+
+        Missing zone field is treated as active (backward-compatible).
+        """
         self.agent_names.clear()
         self.squad_roster.clear()
         self.peer_env_map.clear()
@@ -388,13 +391,19 @@ Agent 生成的输出文件存放在此，可随时下载。
         cfg = load_config()
         peers = cfg.get("peers", {})
         for name, info in peers.items():
-            if isinstance(info, dict) and "gateway_port" in info:
-                self.agent_names.append(name)
-                self.squad_roster[name] = {
-                    "id": info.get("id", f"squad:{name}"),
-                    "gateway_port": info.get("gateway_port", 0),
-                    "ws_port": info.get("ws_port", 0),
-                }
+            if not isinstance(info, dict):
+                continue
+            # Skip archived agents (zone == \"archived\")
+            if info.get("zone") == "archived":
+                continue
+            if "gateway_port" not in info:
+                continue
+            self.agent_names.append(name)
+            self.squad_roster[name] = {
+                "id": info.get("id", f"squad:{name}"),
+                "gateway_port": info.get("gateway_port", 0),
+                "ws_port": info.get("ws_port", 0),
+            }
 
         self.agent_names.sort()
         self._log(f"📋 编制加载: {len(self.agent_names)} agents → {self.agent_names}")

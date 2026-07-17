@@ -640,32 +640,75 @@ def _detect_running_agents(squad_cfg: dict) -> dict[str, bool]:
 
 
 def _find_archived_agents(squad_cfg: dict) -> list[dict]:
-    """Find archived agent directories (.removed.*) and return metadata list.
+    """Find archived agents from squad_config peers (zone=\"archived\") + directory scan.
 
-    Filters out agents that are already in the active peers list.
+    Two-tier:
+      Tier 1 — squad_config peers with zone == \"archived\"
+      Tier 2 — .removed.* dir scan for orphans not in the config
+
+    Orphan directories discovered in Tier 2 are synced back to squad_config.json
+    (zone=\"archived\") so squad_config stays the single source of truth.
     """
     data_root = squad_cfg.get("data_root", "/data")
     peers = squad_cfg.get("peers", {})
-    active_names = set(peers.keys())
-    instances_dir = os.path.join(data_root, "instances")
-    archived = []
+    active_names = {n for n, i in peers.items() if isinstance(i, dict) and i.get("zone") != "archived"}
+    instances_dir = os.path.join(data_root, "legion", "instances")
+    archived: list[dict] = []
+
+    # ── Tier 1: parse squad_config peers with zone="archived" ────
+    for name, info in peers.items():
+        if not isinstance(info, dict):
+            continue
+        if info.get("zone") != "archived":
+            continue
+        # Find the matching .removed.* directory
+        provider = model = ts_str = dir_name = ""
+        if os.path.isdir(instances_dir):
+            for entry in sorted(os.listdir(instances_dir)):
+                if entry.startswith(f"{name}.removed."):
+                    dir_path = os.path.join(instances_dir, entry)
+                    if not os.path.isdir(dir_path):
+                        continue
+                    dir_name = entry
+                    ts_str = entry.split(".removed.", 1)[1]
+                    config_path = os.path.join(dir_path, "config.json")
+                    if os.path.isfile(config_path):
+                        try:
+                            with open(config_path) as f:
+                                cfg = json.load(f)
+                            agents = cfg.get("agents", {})
+                            defaults = agents.get("defaults", {}) if isinstance(agents, dict) else {}
+                            provider = defaults.get("provider", "")
+                            model = defaults.get("model", "")
+                        except (json.JSONDecodeError, OSError):
+                            pass
+                    break  # first match wins
+
+        archived.append({
+            "name": name, "timestamp": ts_str, "dir_name": dir_name,
+            "provider": provider, "model": model, "zone": "archived",
+            "source": "config",
+        })
+
+    # ── Tier 2: directory scan for orphan .removed.* ──────────
+    known = {a["name"] for a in archived} | active_names
+    synced_count = 0
     try:
-        for entry in os.listdir(instances_dir):
+        for entry in sorted(os.listdir(instances_dir)):
             if ".removed." not in entry:
                 continue
             dir_path = os.path.join(instances_dir, entry)
             if not os.path.isdir(dir_path):
                 continue
-            # Parse: name.removed.timestamp → name
             parts = entry.split(".removed.", 1)
             if len(parts) != 2:
                 continue
             orig_name = parts[0]
-            ts_str = parts[1]
+            if orig_name in known or orig_name in active_names:
+                continue
 
-            # Try to read config.json for metadata
-            provider = ""
-            model = ""
+            ts_str = parts[1]
+            provider = model = ""
             config_path = os.path.join(dir_path, "config.json")
             try:
                 with open(config_path) as f:
@@ -678,17 +721,22 @@ def _find_archived_agents(squad_cfg: dict) -> list[dict]:
                 pass
 
             archived.append({
-                "name": orig_name,
-                "timestamp": ts_str,
-                "dir_name": entry,
-                "provider": provider,
-                "model": model,
+                "name": orig_name, "timestamp": ts_str, "dir_name": entry,
+                "provider": provider, "model": model, "zone": "archived",
+                "source": "scan",
             })
+
+            # Sync orphan to squad_config.json
+            peers[orig_name] = {"id": f"squad:{orig_name}", "gateway_port": 0, "ws_port": 0, "zone": "archived"}
+            known.add(orig_name)
+            synced_count += 1
     except OSError:
         pass
 
-    # Filter out agents already in active peers
-    archived = [a for a in archived if a["name"] not in active_names]
+    if synced_count:
+        squad_cfg["peers"] = peers
+        save_config(squad_cfg)
+        print(f"[agent_config] 🔄 已将 {synced_count} 个孤儿归档同步到 squad_config.json", flush=True)
 
     archived.sort(key=lambda x: x.get("name", ""))
     return archived
@@ -990,7 +1038,11 @@ def create_agent_routes(app, gatekeeper):
         )
 
     async def _remove_agent(request: Request):
-        """POST /config/agents/remove — delete a worker agent."""
+        """POST /config/agents/remove — archive a worker agent (zone=\"archived\").
+
+        Sets zone=\"archived\" instead of deleting from peers, preserving the agent
+        entry for display in the archive area and potential restoration later.
+        """
         _user = request.session.get("user")
         if not _user:
             return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
@@ -1017,8 +1069,9 @@ def create_agent_routes(app, gatekeeper):
                 status_code=403,
             )
 
-        # Remove from peers
-        del peers[name]
+        # Archive: set zone="archived" (preserve ports for restore)
+        info["zone"] = "archived"
+        peers[name] = info
         squad_cfg["peers"] = peers
 
         # Persist squad_config.json
@@ -1032,7 +1085,7 @@ def create_agent_routes(app, gatekeeper):
 
         # Archive agent directory — kill process first to release file handles
         data_root = squad_cfg.get("data_root", "/data")
-        agent_dir = os.path.join(data_root, "instances", name)
+        agent_dir = os.path.join(data_root, "legion", "instances", name)
 
         gw_port = info.get("gateway_port", 0)
         if gw_port:
@@ -1060,7 +1113,7 @@ def create_agent_routes(app, gatekeeper):
 
         if os.path.exists(agent_dir):
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            archived_dir = os.path.join(data_root, "instances", f"{name}.removed.{ts}")
+            archived_dir = os.path.join(data_root, "legion", "instances", f"{name}.removed.{ts}")
             moved = False
             try:
                 shutil.move(agent_dir, archived_dir)
@@ -1072,7 +1125,7 @@ def create_agent_routes(app, gatekeeper):
                     shutil.rmtree(agent_dir)
                     moved = True
                 except OSError as e2:
-                    print(f"[agent_config] ⚠️  归档 '{name}' 目录失败: {e2}，已移除 peer", flush=True)
+                    print(f"[agent_config] ⚠️  归档 '{name}' 目录失败: {e2}，已设置 zone=archived", flush=True)
             if moved:
                 print(f"[agent_config] 📦 Agent '{name}' 已归档 → {archived_dir}", flush=True)
         else:
@@ -1082,7 +1135,7 @@ def create_agent_routes(app, gatekeeper):
 
         return JSONResponse({
             "ok": True,
-            "msg": f"Agent '{name}' 已删除。配置已归档，WebUI 侧边栏已更新。",
+            "msg": f"Agent '{name}' 已归档。WebUI 侧边栏已更新。",
         })
 
     async def _restore_agent(request: Request):
@@ -1106,7 +1159,7 @@ def create_agent_routes(app, gatekeeper):
 
         squad_cfg = load_config()
         data_root = squad_cfg.get("data_root", "/data")
-        instances_dir = os.path.join(data_root, "instances")
+        instances_dir = os.path.join(data_root, "legion", "instances")
         src_dir = os.path.join(instances_dir, dir_name)
         dst_dir = os.path.join(instances_dir, name)
 
@@ -1157,8 +1210,12 @@ def create_agent_routes(app, gatekeeper):
                     })
 
         peers = squad_cfg.get("peers", {})
-        if name in peers:
-            return JSONResponse({"ok": False, "error": f"Agent '{name}' 已在 peers 列表中"}, status_code=409)
+        existing_peer = peers.get(name, {})
+        if isinstance(existing_peer, dict) and existing_peer.get("zone") != "archived":
+            return JSONResponse({
+                "ok": False,
+                "error": f"Agent '{name}' 已在活跃 peers 中（zone={existing_peer.get('zone')}），请先归档后再恢复"
+            }, status_code=409)
 
         # Read archived config for port info
         gw = 0
@@ -1182,7 +1239,7 @@ def create_agent_routes(app, gatekeeper):
         except OSError as e:
             return JSONResponse({"ok": False, "error": f"恢复目录失败: {e}"}, status_code=500)
 
-        # Add back to peers — check archived ports for conflicts
+        # Add back to peers with zone=active — check archived ports for conflicts
         if isinstance(gw, (int, float)) and gw > 0 and isinstance(ws, (int, float)) and ws > 0:
             gw_int, ws_int = int(gw), int(ws)
             # Collect all ports currently claimed by peers + actually listening
@@ -1197,10 +1254,10 @@ def create_agent_routes(app, gatekeeper):
                 gw_int, ws_int = _allocate_ports(peers)
                 # Also update the agent's own config.json with re-allocated ports
                 _patch_agent_config_port(dst_dir, gw_int, ws_int)
-            peers[name] = {"id": f"squad:{name}", "gateway_port": gw_int, "ws_port": ws_int}
+            peers[name] = {"id": f"squad:{name}", "gateway_port": gw_int, "ws_port": ws_int, "zone": "active"}
         else:
             gw, ws = _allocate_ports(peers)
-            peers[name] = {"id": f"squad:{name}", "gateway_port": gw, "ws_port": ws}
+            peers[name] = {"id": f"squad:{name}", "gateway_port": gw, "ws_port": ws, "zone": "active"}
 
         # Add to resurrection whitelist
         whitelist = list(squad_cfg.get("resurrection_whitelist", ["neo"]))
@@ -1383,10 +1440,16 @@ def create_agent_routes(app, gatekeeper):
 
         squad_cfg = load_config()
         data_root = squad_cfg.get("data_root", "/data")
-        dir_path = os.path.join(data_root, "instances", dir_name)
+        dir_path = os.path.join(data_root, "legion", "instances", dir_name)
 
         if not os.path.isdir(dir_path):
             return JSONResponse({"ok": False, "error": f"归档目录 '{dir_name}' 不存在"}, status_code=404)
+
+        # Remove from peers
+        peers = squad_cfg.get("peers", {})
+        if name in peers:
+            del peers[name]
+            squad_cfg["peers"] = peers
 
         # Remove from resurrection whitelist if present
         whitelist = list(squad_cfg.get("resurrection_whitelist", []))
@@ -1395,16 +1458,20 @@ def create_agent_routes(app, gatekeeper):
         if name in whitelist:
             whitelist.remove(name)
             squad_cfg["resurrection_whitelist"] = whitelist
-            try:
-                save_config(squad_cfg)
-            except OSError:
-                pass
+
+        # Persist squad_config changes
+        try:
+            save_config(squad_cfg)
+        except OSError:
+            pass
 
         # Permanently delete
         try:
             shutil.rmtree(dir_path)
         except OSError as e:
             return JSONResponse({"ok": False, "error": f"删除目录失败: {e}"}, status_code=500)
+
+        _sync_roster(gatekeeper, squad_cfg)
 
         return JSONResponse({
             "ok": True,
