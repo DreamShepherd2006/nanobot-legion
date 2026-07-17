@@ -118,6 +118,9 @@ import json, os, shlex
 cfg = json.load(open('$SQUAD_CONFIG_PATH'))
 count = 0
 for name, info in cfg.get('peers', {}).items():
+    # Skip archived agents — only active agents get started
+    if info.get('zone', 'active') != 'active':
+        continue
     env_key = f'NANOBOT_PEER_{name.upper()}'
     if env_key not in os.environ:
         val = json.dumps({'id': info['id'], 'gateway_port': info['gateway_port'], 'ws_port': info['ws_port']})
