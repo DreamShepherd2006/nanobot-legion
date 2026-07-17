@@ -684,6 +684,13 @@ def _find_archived_agents(squad_cfg: dict) -> list[dict]:
                             pass
                     break  # first match wins
 
+        # Only include when a matching .removed.* directory exists.
+        # An agent with zone="archived" but no directory is a phantom —
+        # nothing to restore.  Tier 2 directory scan will pick up orphan
+        # directories that are not tracked in squad_config.
+        if not dir_name:
+            continue
+
         archived.append({
             "name": name, "timestamp": ts_str, "dir_name": dir_name,
             "provider": provider, "model": model, "zone": "archived",
