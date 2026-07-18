@@ -27,6 +27,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 nanobot_legion = [
+    "*.html",
     "deploy/*.sh",
     "deploy/*.json",
     "deploy/scripts/*.sh",

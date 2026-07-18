@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent 管理 — 系统配置</title>
+<style>
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family: -apple-system, sans-serif; background:#f5f5f5; color:#333; padding:20px; max-width:720px; margin:0 auto; }
+  h1 { font-size:1.4em; margin-bottom:16px; }
+  h2 { font-size:1.2em; margin:24px 0 12px; }
+  table { width:100%; border-collapse:collapse; background:#fff; border-radius:8px; overflow:hidden; }
+  th,td { padding:10px 14px; text-align:left; border-bottom:1px solid #eee; font-size:.92em; }
+  th { background:#f0f0f0; font-weight:600; }
+  .tag { display:inline-block; padding:2px 8px; border-radius:4px; font-size:.78em; font-weight:600; }
+  .tag-cmd { background:#e3f2fd; color:#1565c0; }
+  .tag-work { background:#fff3e0; color:#e65100; }
+  .empty { color:#999; text-align:center; padding:24px; }
+  .form-group { margin-bottom:14px; }
+  label { display:block; margin-bottom:4px; font-weight:600; font-size:.9em; }
+  input,select,textarea { width:100%; padding:10px 12px; border:1px solid #ddd; border-radius:6px; font-size:.92em; }
+  textarea { resize:vertical; min-height:60px; }
+  button { padding:10px 24px; background:#1565c0; color:#fff; border:none; border-radius:6px; font-size:.95em; cursor:pointer; }
+  button:hover { background:#0d47a1; }
+  .note { background:#fff3cd; border:1px solid #ffc107; border-radius:6px; padding:12px; margin:16px 0; font-size:.88em; }
+  .err { background:#fce4ec; border:1px solid #ef9a9a; color:#c62828; border-radius:6px; padding:12px; margin:16px 0; font-size:.88em; }
+  .ok { background:#e8f5e9; border:1px solid #a5d6a7; color:#2e7d32; border-radius:6px; padding:12px; margin:16px 0; font-size:.88em; }
+  .del-btn { background:none; border:1px solid #ccc; color:#999; padding:4px 10px; font-size:.8em; cursor:pointer; border-radius:4px; margin-left:8px; }
+  .del-btn:hover { border-color:#e53935; color:#e53935; }
+  .restore-btn { background:none; border:1px solid #4caf50; color:#4caf50; padding:4px 10px; font-size:.8em; cursor:pointer; border-radius:4px; }
+  .restore-btn:hover { background:#e8f5e9; }
+  .rez-on { background:#e8f5e9; border:1px solid #4caf50; color:#2e7d32; padding:4px 10px; font-size:.75em; cursor:pointer; border-radius:4px; }
+  .rez-on:hover { background:#ffebee; border-color:#e53935; color:#c62828; }
+  .rez-off { background:#f5f5f5; border:1px solid #ccc; color:#555; padding:4px 10px; font-size:.75em; cursor:pointer; border-radius:4px; }
+  .rez-off:hover { background:#e8f5e9; border-color:#4caf50; color:#2e7d32; }
+  .agent-link { color: #1a56db; text-decoration: none; }
+  .agent-link:hover { text-decoration: underline; }
+  .archived-row td { color:#888; }
+  .conflict-card { display:flex; gap:16px; margin:16px 0; flex-wrap:wrap; }
+  .conflict-col { flex:1 1 260px; background:#fff; border:2px solid #ddd; border-radius:8px; padding:14px; min-width:240px; }
+  .conflict-col h3 { font-size:.95em; margin-bottom:10px; }
+  .conflict-col.existing h3 { color:#e65100; }
+  .conflict-col.archived h3 { color:#1565c0; }
+  .conflict-row { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px dotted #f0f0f0; font-size:.88em; }
+  .conflict-row .k { color:#888; }
+  .conflict-row .v { font-weight:600; max-width:60%; text-align:right; word-break:break-all; }
+  .conflict-actions { display:flex; gap:12px; margin:12px 0; flex-wrap:wrap; }
+  .conflict-btn { flex:1 1 auto; padding:12px 16px; border-radius:6px; font-size:.9em; cursor:pointer; border:none; font-weight:600; }
+  .conflict-btn.keep { background:#fff3e0; color:#e65100; border:2px solid #e65100; }
+  .conflict-btn.keep:hover { background:#ffe0b2; }
+  .conflict-btn.take { background:#e3f2fd; color:#1565c0; border:2px solid #1565c0; }
+  .conflict-btn.take:hover { background:#bbdefb; }
+  .diff-val { color:#c62828; }
+</style>
+</head>
+<body>
+<h1>🤖 Agent 管理</h1>
+
+<p style="margin-bottom:16px;color:#666;font-size:.9em">
+  当前 Legion 编制。Commander (neo) 由初始化配置生成，不可编辑。<br>
+  Worker agent 通过下方表单添加，重启后生效。
+</p>
+
+<h2>✅ 运行中</h2>
+<p style="color:#888;font-size:.82em;margin-bottom:8px">「删除」= 配置归档到下方，可从📦已归档恢复。重启后生效。</p>
+{running_table}
+
+<h2>📦 已归档</h2>
+<p style="color:#888;font-size:.82em;margin-bottom:8px">「恢复」= 还原目录并加入复活白名单。「🗑️」= 彻底删除，不可恢复。</p>
+{archived_table}
+
+<h2>➕ 添加 Worker Agent</h2>
+<form id="addForm">
+  <div class="form-group">
+    <label for="name">名字</label>
+    <input id="name" name="name" type="text" placeholder="例如: trinity" pattern="[a-z][a-z0-9_]*" required>
+    <small style="color:#999">英文小写字母开头，可用数字和下划线</small>
+  </div>
+  <div class="form-group">
+    <label for="role">角色说明</label>
+    <textarea id="role" name="role" placeholder="例如: 写代码、提交 PR、审查代码" required></textarea>
+    <small style="color:#999">描述这个 agent 的职责，将写入 AGENTS.md 作为系统提示词</small>
+  </div>
+  <div class="form-group">
+    <label for="provider">模型服务商 / Provider</label>
+    <select id="provider" name="provider" required>
+{provider_options}
+    </select>
+    <small style="color:#999">选择 API 服务商，不同 agent 可使用不同 provider</small>
+  </div>
+  <div class="form-group">
+    <label for="model">模型</label>
+    <select id="model" name="model" required>
+      <option value="">— 先选择服务商 —</option>
+    </select>
+    <small style="color:#999">也可手动输入模型名（选择「自定义」后在此输入）</small>
+  </div>
+  <div class="form-group">
+    <label for="api_key">API Key</label>
+    <input id="api_key" name="api_key" type="password" placeholder="为此 agent 单独设置 API Key（留空则继承 Commander 的 key）">
+    <small style="color:#999">留空时 worker agent 使用 Commander (neo) 的 API Key</small>
+  </div>
+  <button type="submit">添加</button>
+  <div id="result"></div>
+</form>
+
+<div class="note">
+  ⚠️ <strong>添加后需重启空间</strong>（停止 → 启动）使新 agent 生效。<br>
+  新 agent 仅通过内部 relay 通信，不绑定对外频道。
+</div>
+
+<script>
+// -- provider presets (generated from nanobot official registry) --
+{provider_presets_js}
+
+var elProvider = document.getElementById('provider');
+var elModel = document.getElementById('model');
+
+// -- pre-fill from Commander config --
+var __neo_provider = '{neo_provider_id}';
+var __neo_api_key = '{neo_api_key}';
+
+// Populate model options when provider changes
+elProvider.addEventListener('change', function() {
+  var p = __PP[this.value];
+  var opts = ['<option value="">— 选择模型 —</option>'];
+  if (p) {
+    var models = p.ml || [];
+    for (var i = 0; i < models.length; i++) {
+      opts.push('<option value="' + models[i] + '">' + models[i] + '</option>');
+    }
+  }
+  elModel.innerHTML = opts.join('');
+
+  // Pre-fill api_key if same as neo's provider
+  var ak = document.getElementById('api_key');
+  if (this.value === __neo_provider && !ak.value) {
+    ak.value = __neo_api_key;
+    ak.placeholder = '(继承 Commander 的 API Key)';
+  } else if (this.value && this.value !== __neo_provider) {
+    ak.placeholder = '为此 agent 单独设置 API Key';
+  }
+});
+
+// On page load: select neo's provider by default
+(function init() {
+  if (__neo_provider) {
+    elProvider.value = __neo_provider;
+    elProvider.dispatchEvent(new Event('change'));
+  }
+})();
+
+// Form submit
+document.getElementById('addForm').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const result = document.getElementById('result');
+  result.innerHTML = '';
+  const formData = {
+    name: document.getElementById('name').value.trim(),
+    role: document.getElementById('role').value.trim(),
+    provider: document.getElementById('provider').value,
+    model: document.getElementById('model').value,
+    api_key: document.getElementById('api_key').value.trim()
+  };
+  try {
+    const resp = await fetch('/config/agents/add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(formData)
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      result.innerHTML = '<div class="ok">✅ ' + data.msg + ' — 请重启空间生效</div>';
+      // Refresh agent list after short delay
+      setTimeout(() => { window.location.reload(); }, 1500);
+    } else {
+      result.innerHTML = '<div class="err">❌ ' + data.error + '</div>';
+    }
+  } catch(err) {
+    result.innerHTML = '<div class="err">❌ 提交失败: ' + err.message + '</div>';
+  }
+});
+
+async function removeAgent(name) {
+  if (!confirm('确定要删除 Agent "' + name + '" 吗？\n\n其配置目录将被归档，侧边栏即时生效。')) return;
+  const result = document.getElementById('result');
+  result.innerHTML = '';
+  try {
+    const resp = await fetch('/config/agents/remove', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      result.innerHTML = '<div class="ok">✅ ' + data.msg + '</div>';
+      setTimeout(() => { window.location.reload(); }, 1500);
+    } else {
+      result.innerHTML = '<div class="err">❌ ' + data.error + '</div>';
+    }
+  } catch(err) {
+    result.innerHTML = '<div class="err">❌ 提交失败: ' + err.message + '</div>';
+  }
+}
+async function restoreAgent(name, dirName) {
+  if (!confirm('确定要恢复 Agent "' + name + '" 吗？\n\n目录将恢复，并加入复活白名单。重启空间后生效。')) return;
+  const result = document.getElementById('result');
+  result.innerHTML = '';
+  try {
+    const resp = await fetch('/config/agents/restore', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name, dir_name: dirName})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      result.innerHTML = '<div class="ok">✅ ' + data.msg + '</div>';
+      setTimeout(() => { window.location.reload(); }, 1500);
+    } else if (data.conflict) {
+      showConflict(name, dirName, data.existing, data.archived);
+    } else {
+      result.innerHTML = '<div class="err">❌ ' + data.error + '</div>';
+    }
+  } catch(err) {
+    result.innerHTML = '<div class="err">❌ 提交失败: ' + err.message + '</div>';
+  }
+}
+function showConflict(name, dirName, existing, archived) {
+  const result = document.getElementById('result');
+  let chDiff = '', provDiff = '', modelDiff = '';
+  if (JSON.stringify(existing.channels) !== JSON.stringify(archived.channels)) chDiff = ' diff-val';
+  if (existing.provider !== archived.provider) provDiff = ' diff-val';
+  if (existing.model !== archived.model) modelDiff = ' diff-val';
+  function chs(arr) { return (arr && arr.length) ? arr.join(', ') : '<span style="color:#999">—</span>'; }
+  result.innerHTML = '<div class="conflict-card">' +
+    '<div class="conflict-col existing"><h3>📁 运行中的 Agent（在编）</h3>' +
+    '<div class="conflict-row"><span class="k">服务商</span><span class="v' + provDiff + '">' + h(existing.provider) + '</span></div>' +
+    '<div class="conflict-row"><span class="k">模型</span><span class="v' + modelDiff + '">' + h(existing.model) + '</span></div>' +
+    '<div class="conflict-row"><span class="k">网关端口</span><span class="v">' + (existing.gateway_port||'?') + '</span></div>' +
+    '<div class="conflict-row"><span class="k">WS 端口</span><span class="v">' + (existing.ws_port||'?') + '</span></div>' +
+    '<div class="conflict-row"><span class="k">已启通道</span><span class="v' + chDiff + '">' + chs(existing.channels) + '</span></div>' +
+    '</div>' +
+    '<div class="conflict-col archived"><h3>📦 待恢复的归档版本 (' + dirName.slice(-15) + ')</h3>' +
+    '<div class="conflict-row"><span class="k">服务商</span><span class="v' + provDiff + '">' + h(archived.provider) + '</span></div>' +
+    '<div class="conflict-row"><span class="k">模型</span><span class="v' + modelDiff + '">' + h(archived.model) + '</span></div>' +
+    '<div class="conflict-row"><span class="k">网关端口</span><span class="v">' + (archived.gateway_port||'?') + '</span></div>' +
+    '<div class="conflict-row"><span class="k">WS 端口</span><span class="v">' + (archived.ws_port||'?') + '</span></div>' +
+    '<div class="conflict-row"><span class="k">已启通道</span><span class="v' + chDiff + '">' + chs(archived.channels) + '</span></div>' +
+    '</div>' +
+    '</div>' +
+    '<div class="conflict-actions">' +
+    '<button class="conflict-btn keep" onclick="resolveConflict(\'' + name + '\',\'' + dirName + '\',\'keep\')">✅ 保留现有，废弃归档</button>' +
+    '<button class="conflict-btn take" onclick="resolveConflict(\'' + name + '\',\'' + dirName + '\',\'take\')">📦 恢复归档，废弃现有</button>' +
+    '</div>';
+  function h(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+}
+async function resolveConflict(name, dirName, choice) {
+  const result = document.getElementById('result');
+  result.innerHTML = '';
+  try {
+    const resp = await fetch('/config/agents/restore-confirm', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name, dir_name: dirName, choice: choice})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      result.innerHTML = '<div class="ok">✅ ' + data.msg + '</div>';
+      setTimeout(() => { window.location.reload(); }, 2000);
+    } else {
+      result.innerHTML = '<div class="err">❌ ' + data.error + '</div>';
+    }
+  } catch(err) {
+    result.innerHTML = '<div class="err">❌ 提交失败: ' + err.message + '</div>';
+  }
+}
+
+async function deletePermanent(name, dirName) {
+  if (!confirm('⚠️ 永久删除 Agent "' + name + '"？\n\n此操作不可撤销，配置目录将被彻底删除。')) return;
+  const result = document.getElementById('result');
+  result.innerHTML = '';
+  try {
+    const resp = await fetch('/config/agents/delete-permanent', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name, dir_name: dirName})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      result.innerHTML = '<div class="ok">✅ ' + data.msg + '</div>';
+      setTimeout(() => { window.location.reload(); }, 1500);
+    } else {
+      result.innerHTML = '<div class="err">❌ ' + data.error + '</div>';
+    }
+  } catch(err) {
+    result.innerHTML = '<div class="err">❌ 提交失败: ' + err.message + '</div>';
+  }
+}
+async function startAgent(name) {
+  const result = document.getElementById('result');
+  result.innerHTML = '';
+  try {
+    const resp = await fetch('/config/agents/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      result.innerHTML = '<div class="ok">✅ ' + data.msg + '</div>';
+      setTimeout(() => { window.location.reload(); }, 2000);
+    } else {
+      result.innerHTML = '<div class="err">❌ ' + data.error + '</div>';
+    }
+  } catch(err) {
+    result.innerHTML = '<div class="err">❌ 提交失败: ' + err.message + '</div>';
+  }
+}
+
+async function stopAgent(name) {
+  if (!confirm('确定要停止 Agent "' + name + '" 吗？\n\n进程将被终止，并从复活白名单移除。')) return;
+  const result = document.getElementById('result');
+  result.innerHTML = '';
+  try {
+    const resp = await fetch('/config/agents/stop', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      result.innerHTML = '<div class="ok">✅ ' + data.msg + '</div>';
+      setTimeout(() => { window.location.reload(); }, 2000);
+    } else {
+      result.innerHTML = '<div class="err">❌ ' + data.error + '</div>';
+    }
+  } catch(err) {
+    result.innerHTML = '<div class="err">❌ 提交失败: ' + err.message + '</div>';
+  }
+}
+</script>
+</body>
+</html>
