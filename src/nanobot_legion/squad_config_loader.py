@@ -46,6 +46,7 @@ def _get_config_path() -> str:
 
 _DEFAULTS: dict = {
     "webui_agent": "neo",
+    "owner": "",
     "commander_whitelist": [],
     "user_agent_map": {},
     "data_root": "/data",
