@@ -155,7 +155,20 @@ def sync_configs():
             template = None
 
         if template:
+            # Load squad_config.json for zone info (NANOBOT_PEER_* env vars don't carry zone)
+            squad_cfg_peers = {}
+            try:
+                sc_path = os.environ.get('SQUAD_CONFIG_PATH', '/app/squad_config.json')
+                with open(sc_path) as f:
+                    squad_cfg_peers = json.load(f).get("peers", {})
+            except Exception:
+                pass
+
             for name, info in squad.items():
+                # Skip archived agents — zone=archived means user explicitly removed this agent
+                if squad_cfg_peers.get(name, {}).get("zone", "active") != "active":
+                    continue
+
                 inst_dir = Path(INSTANCES_ROOT) / name
                 cfg_path = inst_dir / "config.json"
 

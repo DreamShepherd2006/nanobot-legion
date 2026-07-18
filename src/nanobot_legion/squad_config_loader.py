@@ -46,6 +46,7 @@ def _get_config_path() -> str:
 
 _DEFAULTS: dict = {
     "webui_agent": "neo",
+    "owner": "",
     "commander_whitelist": [],
     "user_agent_map": {},
     "data_root": "/data",
@@ -71,9 +72,7 @@ def load_config(force_reload: bool = False) -> dict:
         try:
             with open(config_path) as f:
                 file_cfg = json.load(f)
-            for k in _DEFAULTS:
-                if k in file_cfg:
-                    config[k] = file_cfg[k]
+            config.update(file_cfg)
         except (json.JSONDecodeError, IOError):
             pass
 
@@ -118,20 +117,8 @@ def _env_override(config: dict):
         if v:
             config[secret_key.lower()] = v
 
-    # Peers — 从 NANOBOT_PEER_* env 合并（env 中的 peer 覆盖/追加文件中的）
-    for key, val in sorted(os.environ.items()):
-        if key.startswith("NANOBOT_PEER_"):
-            agent_name = key[len("NANOBOT_PEER_"):].lower()
-            try:
-                info = json.loads(val)
-                if isinstance(info, dict) and "id" in info:
-                    config["peers"][agent_name] = {
-                        "id": info["id"],
-                        "gateway_port": info.get("gateway_port", 0),
-                        "ws_port": info.get("ws_port", 0),
-                    }
-            except (json.JSONDecodeError, TypeError):
-                pass
+    # Peers — 只从 squad_config.json 读取，不再从 NANOBOT_PEER_* env 合并
+    # （env 合并会丢失 zone 等字段，导致 zone 过滤失效）
 
 
 def save_config(config: dict | None = None) -> None:
