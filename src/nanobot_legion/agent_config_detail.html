@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{agent_name} — 配置</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width:600px; margin:20px auto; padding:0 16px; color:#222; }}
+  h2 {{ margin-bottom:4px; font-size:1.3em; }}
+  .subtle {{ color:#888; font-size:.85em; margin-bottom:20px; }}
+  label {{ display:block; font-weight:600; margin-top:14px; margin-bottom:4px; font-size:.9em; }}
+  input, select {{ width:100%; box-sizing:border-box; padding:8px 10px; border:1px solid #ccc; border-radius:6px; font-size:.95em; }}
+  input:focus, select:focus {{ outline:none; border-color:#4f46e5; box-shadow:0 0 0 3px rgba(79,70,229,.15); }}
+  .row {{ display:flex; gap:16px; }}
+  .row > div {{ flex:1; }}
+  .ro {{ background:#f9fafb; color:#666; }}
+  .btn {{ background:#4f46e5; color:#fff; border:none; padding:10px 24px; font-size:.95em; border-radius:6px; cursor:pointer; margin-top:18px; }}
+  .btn:hover {{ background:#4338ca; }}
+  .back {{ color:#888; font-size:.85em; }}
+</style>
+</head>
+<body>
+<h2>⚙️ {agent_name} {agent_role}</h2>
+<p class="subtle">修改后需在 Agent 管理页手动启停生效。</p>
+
+<label>服务商</label>
+<select id="provider">{provider_options}</select>
+
+<label>API Key</label>
+<input type="password" id="api_key" value="{api_key_escaped}" placeholder="sk-...">
+
+<div class="row">
+  <div><label>模型</label><input type="text" id="model" value="{model_escaped}" placeholder="模型标识"></div>
+  <div><label>gateway 端口</label><input class="ro" type="text" value="{gw_port}" readonly></div>
+  <div><label>ws 端口</label><input class="ro" type="text" value="{ws_port}" readonly></div>
+</div>
+
+<button class="btn" onclick="saveConfig('{name_js_escaped}')">保存</button>
+<div id="result"></div>
+
+<p><a class="back" href="/config/agents">← 返回 Agent 管理</a></p>
+
+<script>
+var _presets = {presets_js_data};
+var _curApiKey = {api_key_json};
+
+// Fill model on provider change
+(function() {{
+  var sel = document.getElementById('provider');
+  var modelInp = document.getElementById('model');
+  function updateModel() {{
+    var p = sel.value;
+    var pk = document.getElementById('api_key');
+    if (p && _presets[p] && _presets[p].models.length > 0) {{
+      modelInp.value = _presets[p].models[0];
+    }}
+    // Keep current key unless provider changed from original
+  }}
+  sel.addEventListener('change', updateModel);
+  // On first load, ensure model matches provider
+  if (!modelInp.value && sel.value && _presets[sel.value]) {{
+    modelInp.value = _presets[sel.value].models[0] || '';
+  }}
+}})();
+
+async function saveConfig(name) {{
+  var result = document.getElementById('result');
+  result.innerHTML = '';
+  var provider = document.getElementById('provider').value;
+  var api_key = document.getElementById('api_key').value;
+  var model = document.getElementById('model').value;
+  if (!provider) {{ result.innerHTML = '<div style="color:#c62828;margin-top:12px">❌ 请选择服务商</div>'; return; }}
+  if (!api_key) {{ result.innerHTML = '<div style="color:#c62828;margin-top:12px">❌ 请输入 API Key</div>'; return; }}
+  try {{
+    var resp = await fetch('/config/agents/' + name + '/save', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{provider: provider, api_key: api_key, model: model}})
+    }});
+    var data = await resp.json();
+    if (data.ok) {{
+      result.innerHTML = '<div style="color:#2e7d32;margin-top:12px">✅ ' + data.msg + '</div>';
+    }} else {{
+      result.innerHTML = '<div style="color:#c62828;margin-top:12px">❌ ' + data.error + '</div>';
+    }}
+  }} catch(err) {{
+    result.innerHTML = '<div style="color:#c62828;margin-top:12px">❌ 保存失败: ' + err.message + '</div>';
+  }}
+}}
+</script>
+</body>
+</html>
