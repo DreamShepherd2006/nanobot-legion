@@ -72,9 +72,7 @@ def load_config(force_reload: bool = False) -> dict:
         try:
             with open(config_path) as f:
                 file_cfg = json.load(f)
-            for k in _DEFAULTS:
-                if k in file_cfg:
-                    config[k] = file_cfg[k]
+            config.update(file_cfg)
         except (json.JSONDecodeError, IOError):
             pass
 
