@@ -263,7 +263,7 @@ def create_squad_admin_routes(app, gatekeeper):
         whitelist = cfg.get("commander_whitelist", [])
         if user not in whitelist:
             return JSONResponse({"ok": False, "error": f"'{user}' 不在白名单中"}, status_code=404)
-        owner = cfg.get("owner", "")
+        owner = cfg.get("owner") or (whitelist[0] if whitelist else "")
         if owner and user == owner:
             return JSONResponse({"ok": False, "error": "空间所有者不可删除"}, status_code=403)
         whitelist.remove(user)
