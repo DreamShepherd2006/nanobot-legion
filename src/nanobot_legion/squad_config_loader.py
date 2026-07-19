@@ -136,6 +136,7 @@ def save_config(config: dict | None = None) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
     os.replace(tmp, path)
+    _config_cache = config
 
 
 # ── 便捷存取 ────────────────────────────────────────────
