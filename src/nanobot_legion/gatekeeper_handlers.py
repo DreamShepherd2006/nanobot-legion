@@ -1,7 +1,7 @@
 """Gatekeeper HTTP route handlers (extracted from gatekeeper.py).
 
-Each handler function takes the Gatekeeper instance as its first parameter,
-replacing what was previously ``self`` inside the Gatekeeper class.
+Each handler reads the Gatekeeper instance from ``request.app.state.gatekeeper``,
+which is set during ``create_app``.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ import datetime
 import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import httpx
@@ -19,23 +18,27 @@ import websockets
 from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
-if TYPE_CHECKING:
-    from .gatekeeper import Gatekeeper
-
 _DENIED = "<h3 style='text-align:center;margin-top:60px;color:#e74c3c;'>🔒 仅 Commander 或已映射用户可访问</h3>"
+
+
+def _gk(request: Request):
+    """Convenience: get Gatekeeper from app.state."""
+    return request.app.state.gatekeeper
 
 
 # ── Health ─────────────────────────────────────────────────────
 
-async def handle_health(gk: Gatekeeper) -> dict:
+async def handle_health(request: Request) -> dict:
+    gk = _gk(request)
     return {"status": "ok", "role": "gatekeeper",
             "agents": len(gk.agent_names)}
 
 
 # ── Reset ─────────────────────────────────────────────────────
 
-async def handle_reset_setup(gk: Gatekeeper, request: Request) -> JSONResponse:
+async def handle_reset_setup(request: Request) -> JSONResponse:
     """GET /reset-setup — delete oauth.json to re-enter Phase 1 setup."""
+    gk = _gk(request)
     _user = request.session.get("user")
     if not _user:
         return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
@@ -66,8 +69,10 @@ async def handle_reset_setup(gk: Gatekeeper, request: Request) -> JSONResponse:
 
 # ── Relay ──────────────────────────────────────────────────────
 
-async def handle_relay(gk: Gatekeeper, request: Request):
+async def handle_relay(request: Request):
     """POST /api/squad/relay — cross-agent message relay via WS."""
+    gk = _gk(request)
+
     # Auth
     auth_header = request.headers.get("X-Squad-Token", "")
     if not gk._relay_token or auth_header != gk._relay_token:
@@ -233,8 +238,9 @@ async def handle_relay(gk: Gatekeeper, request: Request):
 
 # ── Task Tracking ──────────────────────────────────────────────
 
-async def handle_tasks_post(gk: Gatekeeper, request: Request):
+async def handle_tasks_post(request: Request):
     """POST /api/squad/tasks — Commander pushes structured task list."""
+    gk = _gk(request)
     auth_header = request.headers.get("X-Squad-Token", "")
     if not gk._relay_token or auth_header != gk._relay_token:
         return JSONResponse({"status": "unauthorized"}, status_code=401)
@@ -261,8 +267,9 @@ async def handle_tasks_post(gk: Gatekeeper, request: Request):
     return JSONResponse({"status": "ok", "tasks": len(tasks), "done": done})
 
 
-async def handle_tasks_get(gk: Gatekeeper, request: Request):
+async def handle_tasks_get(request: Request):
     """GET /api/squad/tasks — read current task list."""
+    gk = _gk(request)
     auth_header = request.headers.get("X-Squad-Token", "")
     if not gk._relay_token or auth_header != gk._relay_token:
         return JSONResponse({"status": "unauthorized"}, status_code=401)
@@ -272,7 +279,8 @@ async def handle_tasks_get(gk: Gatekeeper, request: Request):
 
 # ── Sessions Proxy ─────────────────────────────────────────────
 
-async def handle_sessions(gk: Gatekeeper, request: Request):
+async def handle_sessions(request: Request):
+    gk = _gk(request)
     _uname, target_agent, ws_port = gk._resolve_user_context(request)
     if not target_agent:
         return JSONResponse({"error": "未授权访问"}, status_code=403)
@@ -295,7 +303,8 @@ async def handle_sessions(gk: Gatekeeper, request: Request):
         return JSONResponse({"error": str(e)}, status_code=502)
 
 
-async def handle_sessions_sub(gk: Gatekeeper, request: Request, path: str):
+async def handle_sessions_sub(request: Request, path: str):
+    gk = _gk(request)
     _uname, target_agent, ws_port = gk._resolve_user_context(request)
     if not target_agent:
         return JSONResponse({"error": "未授权访问"}, status_code=403)
@@ -322,8 +331,9 @@ async def handle_sessions_sub(gk: Gatekeeper, request: Request, path: str):
 
 # ── Index (login page / WebUI proxy) ───────────────────────────
 
-async def handle_index(gk: Gatekeeper, request: Request):
+async def handle_index(request: Request):
     """Serve login page for guests, or proxy to agent WebUI for auth'd users."""
+    gk = _gk(request)
     uname, target_agent, _ws_port = gk._resolve_user_context(request)
     if not uname:
         uname = "Unknown"
@@ -381,8 +391,9 @@ async def handle_index(gk: Gatekeeper, request: Request):
 
 # ── Catch-all HTTP proxy ───────────────────────────────────────
 
-async def handle_catch_all(gk: Gatekeeper, request: Request, path: str):
+async def handle_catch_all(request: Request, path: str):
     """Proxy unmatched HTTP traffic to the user's assigned agent ws_port."""
+    gk = _gk(request)
     uname, target_agent, _ws_port = gk._resolve_user_context(request)
 
     if not target_agent:

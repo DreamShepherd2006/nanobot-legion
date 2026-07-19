@@ -1298,18 +1298,18 @@ def create_app() -> FastAPI:
     _app.add_api_route("/files/touch", _fm_touch_file, methods=["POST"], response_model=None)
 
     # ── Wire routes ───────────────────────────────────────────
-    import functools
-    _app.get("/health")(functools.partial(handle_health, gk))
-    _app.post("/api/squad/relay")(functools.partial(handle_relay, gk))
-    _app.post("/api/squad/tasks")(functools.partial(handle_tasks_post, gk))
-    _app.get("/api/squad/tasks")(functools.partial(handle_tasks_get, gk))
-    _app.get("/api/squad/sessions")(functools.partial(handle_sessions, gk))
+    _app.state.gatekeeper = gk
+    _app.get("/health")(handle_health)
+    _app.post("/api/squad/relay")(handle_relay)
+    _app.post("/api/squad/tasks")(handle_tasks_post)
+    _app.get("/api/squad/tasks")(handle_tasks_get)
+    _app.get("/api/squad/sessions")(handle_sessions)
     _app.api_route("/api/squad/sessions/{path:path}",
-                   methods=["GET", "POST", "DELETE"])(functools.partial(handle_sessions_sub, gk))
-    _app.get("/reset-setup")(functools.partial(handle_reset_setup, gk))
-    _app.get("/")(functools.partial(handle_index, gk))
+                   methods=["GET", "POST", "DELETE"])(handle_sessions_sub)
+    _app.get("/reset-setup")(handle_reset_setup)
+    _app.get("/")(handle_index)
     _app.api_route("/{path:path}",
-                   methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])(functools.partial(handle_catch_all, gk))
+                   methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])(handle_catch_all)
     _app.websocket("/{path:path}")(gk._handle_ws_proxy)
 
     return _app
