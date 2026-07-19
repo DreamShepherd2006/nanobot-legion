@@ -53,49 +53,11 @@ def _is_transient(error: str | None) -> bool:
 
 def _get_allowed_peers(sender_id: str) -> list[str] | str:
     """
-    Returns:
-        "*"       → Commander (in COMMANDER_WHITELIST) — can message any agent.
-        ["neo", …] → Business user (in USER_AGENT_MAP) — only mapped agents.
-        []        → Guest — blocked.
-
-    sender_id can be either an HF username (DreamShepherd2006) or an agent alias
-    (neo). If it's an agent alias, we reverse-lookup USER_AGENT_MAP to find the
-    owning HF username, then apply permission rules.
+    Permission check moved to gatekeeper.py (reads squad_config.json).
+    All intra-container senders are trusted — bridge only enforces
+    at the gatekeeper relay level.
     """
-    commander_whitelist = os.environ.get("COMMANDER_WHITELIST", "")
-    user_agent_map_str = os.environ.get("USER_AGENT_MAP", "")
-
-    whitelist = [w.strip().lower() for w in commander_whitelist.split(",") if w.strip()]
-
-    # Parse USER_AGENT_MAP and build reverse lookup (agent alias → username)
-    # Format: {"username": "NANOBOT_PEER_NEO", ...}  (flat, values are strings)
-    try:
-        user_map = json.loads(user_agent_map_str) if user_agent_map_str else {}
-    except json.JSONDecodeError:
-        user_map = {}
-    agent_to_user: dict[str, str] = {}
-    for uname, peer_key in user_map.items():
-        if isinstance(peer_key, str) and peer_key.upper().startswith("NANOBOT_PEER_"):
-            agent_name = peer_key[len("NANOBOT_PEER_"):].lower()
-            agent_to_user[agent_name] = uname.lower()
-
-    # Resolve effective user
-    effective = sender_id.lower()
-    if effective in agent_to_user:
-        effective = agent_to_user[effective]
-
-    # Commander check
-    if effective in whitelist:
-        return "*"
-
-    # Business user check
-    if effective in user_map:
-        peer_key = user_map[effective]
-        if isinstance(peer_key, str) and peer_key.upper().startswith("NANOBOT_PEER_"):
-            allowed: list[str] = [peer_key[len("NANOBOT_PEER_"):].lower()]
-            return allowed
-
-    return []
+    return "*"
 
 
 # ── Helpers ────────────────────────────────────────────────
