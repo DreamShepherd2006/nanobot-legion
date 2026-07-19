@@ -42,6 +42,7 @@ import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse, Response, StreamingResponse
 from starlette.middleware.sessions import SessionMiddleware
+import websockets
 from cloud_agent_gateway.channel_binding import discover as discover_bindings
 from cloud_agent_gateway import file_manager
 from cloud_agent_gateway.package_source import get_package_source, build_source_link
