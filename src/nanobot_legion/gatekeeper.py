@@ -35,7 +35,6 @@ import subprocess
 import sys
 import time
 import asyncio
-from uuid import uuid4
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -55,6 +54,17 @@ from cloud_agent_gateway.package_source import get_package_source, build_source_
 from .squad_config_loader import get_relay_timeout, get_resurrection_whitelist, load_config  # noqa: E402
 from cloud_agent_gateway.platforms import platform  # noqa: E402
 from .agent_config import create_agent_routes  # noqa: E402
+from .gatekeeper_handlers import (  # noqa: E402
+    handle_catch_all,
+    handle_health,
+    handle_index,
+    handle_relay,
+    handle_reset_setup,
+    handle_sessions,
+    handle_sessions_sub,
+    handle_tasks_get,
+    handle_tasks_post,
+)
 from .squad_admin import create_squad_admin_routes  # noqa: E402
 
 
@@ -794,442 +804,9 @@ Agent 生成的输出文件存放在此，可随时下载。
         yield
 
     # ═══════════════════════════════════════════════════════════
-    # [Section 10] HTTP Route Handlers
     # ═══════════════════════════════════════════════════════════
-
-    # ── Health ─────────────────────────────────────────────────
-
-    async def _handle_health(self) -> dict:
-        return {"status": "ok", "role": "gatekeeper",
-                "agents": len(self.agent_names)}
-
-    # ── Reset ─────────────────────────────────────────────────
-
-    async def _handle_reset_setup(self, request: Request) -> JSONResponse:
-        """GET /reset-setup — delete oauth.json to re-enter Phase 1 setup."""
-        _user = request.session.get("user")
-        if not _user:
-            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
-        if not self._platform.is_commander(_user):
-            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
-        from pathlib import Path
-        deleted = []
-        # Check multiple possible paths (HF vs MS, and edge cases)
-        candidates = [
-            Path(self._platform.data_root, "oauth.json"),
-            Path(self._platform.data_root, "instances", "oauth.json"),
-            # 上层 data_root 中的 oauth.json（legion/ 隔离后 oauth 仍在根目录）
-            Path(self._platform.data_root).parent / "oauth.json",
-            Path("/data", "instances", "oauth.json"),
-            Path("/data", "oauth.json"),
-            Path("/mnt/workspace", "oauth.json"),
-        ]
-        for p in candidates:
-            try:
-                p.unlink()
-                deleted.append(str(p))
-            except FileNotFoundError:
-                pass
-
-        if deleted:
-            msg = f"已删除: {', '.join(deleted)}。请重启空间进入 Setup 页面。"
-        else:
-            msg = "未找到 oauth.json（可能已被删除）。如需重新配置，请重启空间。"
-        return JSONResponse({"ok": True, "message": msg, "deleted": deleted})
-
-    # ── Relay ──────────────────────────────────────────────────
-
-    async def _handle_relay(self, request: Request):
-        """POST /api/squad/relay — cross-agent message relay via WS."""
-        # Auth
-        auth_header = request.headers.get("X-Squad-Token", "")
-        if not self._relay_token or auth_header != self._relay_token:
-            return JSONResponse(
-                {"status": "unauthorized",
-                 "error": "invalid or missing X-Squad-Token"}, status_code=401)
-
-        # Parse
-        try:
-            body = await request.json()
-        except Exception:
-            return JSONResponse(
-                {"status": "bad_request", "error": "invalid JSON"}, status_code=400)
-
-        sender = (body.get("sender") or "").strip()
-        commander = (body.get("commander") or "").strip()
-        target = (body.get("target") or "").strip().lower()
-        message = body.get("message") or ""
-        corr_id = body.get("correlation_id", f"sq-relay-{uuid4().hex[:8]}")
-
-        if not sender or not target or not message:
-            return JSONResponse(
-                {"status": "bad_request",
-                 "error": "missing sender/target/message"}, status_code=400)
-
-        # Roster & liveness
-        if target not in self.squad_roster:
-            return JSONResponse(
-                {"status": "roster_miss",
-                 "error": f"'{target}' not in squad",
-                 "correlation_id": corr_id}, status_code=404)
-        if self.legion_status.get(target) != "online":
-            return JSONResponse(
-                {"status": "agent_offline",
-                 "error": f"'{target}' is offline",
-                 "correlation_id": corr_id}, status_code=503)
-
-        # Permission: check commander (OAuth identity) if provided,
-        # otherwise fall back to sender (backward compat).
-        auth_identity = commander or sender
-        if not self._platform.check_relay_permission(auth_identity, target):
-            return JSONResponse({
-                "status": "permission_denied",
-                "error": f"'{auth_identity}' not authorized for '{target}'",
-                "correlation_id": corr_id,
-            }, status_code=403)
-
-        # Relay via WebSocket
-        target_info = self.squad_roster[target]
-        nanobot_token = os.environ.get("NANOBOT_TOKEN", "").strip()
-        ws_url = f"ws://127.0.0.1:{target_info['ws_port']}/"
-        if nanobot_token:
-            ws_url += f"?token={nanobot_token}"
-
-        try:
-            self._log(f"📨 [Relay] {sender}→{target} connect {ws_url}")
-            ws = await asyncio.wait_for(
-                websockets.connect(ws_url, close_timeout=5), timeout=15)
-            async with ws:
-                greeting_raw = await asyncio.wait_for(ws.recv(), timeout=10)
-                greeting = json.loads(greeting_raw)
-                if greeting.get("event") != "ready":
-                    self._log(f"❌ [Relay] unexpected greeting: {greeting}")
-                    return JSONResponse({
-                        "status": "protocol_error",
-                        "error": f"expected 'ready' event, got {greeting.get('event')}",
-                        "correlation_id": corr_id,
-                    }, status_code=502)
-
-                # Inject relay identity so neo sees:
-                #   - which agent relayed (sender_id: agent:<agent>)
-                #   - which Commander authorised it (commander_id: oauth:<user>)
-                # This mirrors the WebUI path where process_commander_message
-                # injects sender_id=oauth:<username>.
-                envelope = {
-                    "type": "message",
-                    "chat_id": target_info["id"],
-                    "content": message,
-                    "sender_id": f"agent:{sender}",
-                    "sender_name": sender,
-                }
-                if commander:
-                    envelope["commander_id"] = f"oauth:{commander}"
-                    envelope["commander_name"] = commander
-                payload = json.dumps(envelope)
-                await ws.send(payload)
-                self._log(f"📨 [Relay] {sender}→{target} sent ({len(payload)}B)")
-
-                responses: list[str] = []
-                try:
-                    while True:
-                        raw = await asyncio.wait_for(ws.recv(),
-                                                     timeout=self._relay_timeout)
-                        try:
-                            data = json.loads(raw)
-                        except json.JSONDecodeError:
-                            self._log(f"📨 [Relay] non-JSON frame ({len(raw)}B)")
-                            continue
-
-                        event = data.get("event", "")
-
-                        if event == "error":
-                            detail = data.get("detail", "unknown")
-                            self._log(f"❌ [Relay] framework error: {detail}")
-                            return JSONResponse({
-                                "status": "framework_error",
-                                "error": detail,
-                                "correlation_id": corr_id,
-                            }, status_code=502)
-
-                        if event == "heartbeat":
-                            continue
-
-                        if event == "turn_end":
-                            reply = "\n".join(responses) if responses else "(empty)"
-                            self._log(f"✅ [Relay] {sender}→{target} ok ({len(reply)} chars)")
-                            return JSONResponse({
-                                "status": "delivered",
-                                "target_response": reply,
-                                "target": target,
-                                "correlation_id": corr_id,
-                            })
-
-                        if event == "delta":
-                            text = data.get("text", "")
-                            if text:
-                                responses.append(text)
-                            continue
-
-                        if event == "stream_end":
-                            continue
-
-                        content = data.get("content")
-                        if content and content.strip():
-                            responses.append(content)
-
-                except asyncio.TimeoutError:
-                    if responses:
-                        reply = "\n".join(responses)
-                        self._log(f"⏱️ [Relay] timeout with partial ({len(reply)} chars)")
-                        return JSONResponse({
-                            "status": "partial",
-                            "target_response": reply,
-                            "target": target,
-                            "correlation_id": corr_id,
-                        })
-                    self._log(f"⏱️ [Relay] timeout ({self._relay_timeout}s)")
-                    return JSONResponse({
-                        "status": "timeout",
-                        "error": f"no response from agent within {self._relay_timeout}s",
-                        "correlation_id": corr_id,
-                    }, status_code=504)
-
-        except asyncio.TimeoutError:
-            self._log("❌ [Relay] connect timeout (15s)")
-            return JSONResponse({
-                "status": "connection_error",
-                "error": "WebSocket connection timed out",
-                "correlation_id": corr_id,
-            }, status_code=502)
-        except Exception as e:
-            self._log(f"❌ [Relay] {sender}→{target} error: {type(e).__name__}: {e}")
-            return JSONResponse({
-                "status": "connection_error",
-                "error": f"{type(e).__name__}: {e}",
-                "correlation_id": corr_id,
-            }, status_code=502)
-
-    # ── Task Tracking ──────────────────────────────────────────
-
-    async def _handle_tasks_post(self, request: Request):
-        """POST /api/squad/tasks — Commander pushes structured task list."""
-        auth_header = request.headers.get("X-Squad-Token", "")
-        if not self._relay_token or auth_header != self._relay_token:
-            return JSONResponse({"status": "unauthorized"}, status_code=401)
-        try:
-            body = await request.json()
-        except Exception:
-            return JSONResponse(
-                {"status": "bad_request", "error": "invalid JSON"}, status_code=400)
-        goal = body.get("goal", "")
-        tasks = body.get("tasks", [])
-        if not isinstance(tasks, list):
-            return JSONResponse(
-                {"status": "bad_request", "error": "tasks must be a list"},
-                status_code=400)
-        self.latest_tasks = {
-            "goal": goal,
-            "tasks": tasks,
-            "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
-            "updated_by": body.get("updated_by", "unknown"),
-        }
-        done = sum(1 for t in tasks if t.get("status") == "done")
-        self._log(f"📋 [Tasks] {done}/{len(tasks)} → "
-                  f"{[t.get('title', '?') for t in tasks[:5]]}")
-        return JSONResponse({"status": "ok", "tasks": len(tasks), "done": done})
-
-    async def _handle_tasks_get(self, request: Request):
-        """GET /api/squad/tasks — read current task list."""
-        auth_header = request.headers.get("X-Squad-Token", "")
-        if not self._relay_token or auth_header != self._relay_token:
-            return JSONResponse({"status": "unauthorized"}, status_code=401)
-        return JSONResponse(
-            self.latest_tasks or {"goal": "", "tasks": [], "updated_by": "none"})
-
-    # ── Sessions Proxy ─────────────────────────────────────────
-    # ⚠️  Uses a FRESH httpx.AsyncClient per request (no shared state with
-    #    catch-all proxy's per-agent clients).  This avoids the 502 bug
-    #    (2026-06-01) where _default_client's base_url polluted sessions routing.
-
-    async def _handle_sessions(self, request: Request):
-        _uname, target_agent, ws_port = self._resolve_user_context(request)
-        if not target_agent:
-            return JSONResponse({"error": "未授权访问"}, status_code=403)
-        if not ws_port:
-            ws_port = self.squad_roster.get(self.webui_agent, {}).get("ws_port", 20002)
-
-        token = request.query_params.get("token", "")
-        target = f"http://127.0.0.1:{ws_port}/api/sessions"
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(target, headers=headers)
-            return Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                media_type=resp.headers.get("content-type", "application/json"),
-            )
-        except Exception as e:
-            self._log(f"❌ sessions proxy error: {e}")
-            return JSONResponse({"error": str(e)}, status_code=502)
-
-    async def _handle_sessions_sub(self, request: Request, path: str):
-        _uname, target_agent, ws_port = self._resolve_user_context(request)
-        if not target_agent:
-            return JSONResponse({"error": "未授权访问"}, status_code=403)
-        if not ws_port:
-            ws_port = self.squad_roster.get(self.webui_agent, {}).get("ws_port", 20002)
-
-        token = request.query_params.get("token", "")
-        target = f"http://127.0.0.1:{ws_port}/api/sessions/{path}"
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
-        body = await request.body() or None
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.request(
-                    request.method, target, headers=headers, content=body)
-            return Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                media_type=resp.headers.get("content-type", "application/json"),
-            )
-        except Exception as e:
-            self._log(f"❌ sessions proxy error: {e}")
-            return JSONResponse({"error": str(e)}, status_code=502)
-
-    # ── Index (login page / WebUI proxy) ───────────────────────
-
-    async def _handle_index(self, request: Request):
-        """Serve login page for guests, or proxy to agent WebUI for auth'd users."""
-        uname, target_agent, _ws_port = self._resolve_user_context(request)
-        if not uname:
-            uname = "Unknown"
-
-        # Guests → login page
-        if uname.lower() in ("guest", "unknown"):
-            login_url = "/api/squad/auth/login"
-            return HTMLResponse(content=f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Nanobot Legion — MS Staging</title>
-<style>
-  * {{ margin:0; padding:0; box-sizing:border-box; }}
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background:#0f0f0f; color:#e0e0e0; display:flex; align-items:center; justify-content:center; min-height:100vh; }}
-  .card {{ background:#1a1a1a; border:1px solid #333; border-radius:12px; padding:48px 40px; text-align:center; max-width:420px; width:90%; }}
-  h1 {{ font-size:1.4rem; margin-bottom:12px; color:#fff; }}
-  p {{ color:#999; margin-bottom:24px; line-height:1.6; }}
-  .btn {{ display:inline-block; background:#1677ff; color:#fff; padding:12px 32px; border-radius:8px; text-decoration:none; font-weight:600; font-size:1rem; transition:background .2s; }}
-  .btn:hover {{ background:#4096ff; }}
-  .hint {{ margin-top:20px; font-size:0.8rem; color:#666; }}
-</style>
-</head>
-<body>
-  <div class="card">
-    <h1>🐈 Nanobot Legion</h1>
-    <p>请使用 ModelScope 账号登录以访问指挥中心。</p>
-    <a class="btn" href="{login_url}" target="_blank">🔑 使用 ModelScope 登录</a>
-    <p class="hint">登录完成后请刷新本页面</p>
-  </div>
-</body>
-</html>""", status_code=200)
-
-        # Unauthorised authenticated user → 403
-        if not target_agent:
-            return HTMLResponse(_DENIED, status_code=403)
-
-        # Authenticated → proxy to agent
-        client = self._http_clients.get(target_agent)
-        if not client:
-            client = self._http_clients.get(self.webui_agent)
-        if not client:
-            return HTMLResponse("<h1>Staging: no agent available</h1>",
-                                status_code=503)
-        try:
-            resp = await client.get("/")
-            return HTMLResponse(
-                content=resp.text,
-                status_code=resp.status_code,
-                headers=dict(resp.headers),
-            )
-        except Exception as e:
-            self._log(f"❌ [GET /] proxy to {target_agent} failed: {e}")
-            return HTMLResponse(f"<h1>Agent {target_agent} unreachable</h1>",
-                                status_code=502)
-
-    # ── Catch-all HTTP proxy ───────────────────────────────────
-
-    async def _handle_catch_all(self, request: Request, path: str):
-        """Proxy unmatched HTTP traffic to the user's assigned agent ws_port."""
-        uname, target_agent, _ws_port = self._resolve_user_context(request)
-
-        if not target_agent:
-            return Response(content="Unauthorized", status_code=403)
-
-        client = self._http_clients.get(target_agent)
-        if not client:
-            client = self._http_clients.get(self.webui_agent)
-        if not client:
-            return Response(content="No agent available", status_code=503)
-
-        try:
-            url = httpx.URL(
-                path=f"/{path}" if path else "/",
-                query=request.url.query.encode("utf-8"))
-            blacklist = set(h.lower() for h in self._platform.proxy_header_blacklist)
-            headers = {k: v for k, v in request.headers.items()
-                       if k.lower() not in blacklist}
-            # 🔧 On platforms that strip Authorization header (ModelScope),
-            # fall back to ?token= query parameter for API calls.
-            if "authorization" not in {k.lower() for k in headers}:
-                _q = request.url.query.decode("utf-8") if isinstance(request.url.query, bytes) else request.url.query
-                if "token=" in _q:
-                    for _p in _q.split("&"):
-                        if _p.startswith("token="):
-                            _tok = _p.split("=", 1)[1]
-                            headers["authorization"] = f"Bearer {_tok}"
-                            break
-            rp_req = client.build_request(
-                request.method, url, headers=headers,
-                content=await request.body())
-            rp_resp = await client.send(rp_req, stream=True)
-
-            # Fix ws_url in bootstrap response (synced from oauth_proxy.py).
-            # nanobot >= dbdb146f constructs ws_url from the Host header; when
-            # gatekeeper strips Host (proxy_header_blacklist), nanobot falls back
-            # to 127.0.0.1:port. Rewrite ws_url → relative ws_path so the browser
-            # always connects through the gatekeeper proxy.
-            if path == "webui/bootstrap" and rp_resp.status_code == 200:
-                body = await rp_resp.aread()
-                try:
-                    data = json.loads(body)
-                    ws_path = data.get("ws_path", "")
-                    if ws_path:
-                        data["ws_url"] = ws_path
-                        body = json.dumps(data).encode("utf-8")
-                        self._log("bootstrap ws_url → ws_path (Host header fix)")
-                except Exception as exc:
-                    self._log(f"bootstrap ws_url fix skipped: {exc}")
-                resp_headers = {k: v for k, v in rp_resp.headers.items()
-                                 if k.lower() != "content-length"}
-                return Response(
-                    content=body,
-                    status_code=rp_resp.status_code,
-                    headers=resp_headers,
-                    media_type=rp_resp.headers.get("content-type", "application/json"))
-
-            return StreamingResponse(
-                rp_resp.aiter_raw(),
-                status_code=rp_resp.status_code,
-                headers=dict(rp_resp.headers))
-        except Exception:
-            return Response(content="System Warming Up...", status_code=503)
-
+    # [Section 10] WebSocket Proxy — Multiplexer v6.0
     # ═══════════════════════════════════════════════════════════
-    # [Section 11] WebSocket Proxy — Multiplexer v6.0
-    # ═══════════════════════════════════════════════════════════
-
     async def _handle_ws_proxy(self, path: str, client_ws: WebSocket):
         """Multiplex Commander's WS: primary agent (bidirectional)
         + all other squad agents (read-only observer captures).
@@ -1722,17 +1299,18 @@ def create_app() -> FastAPI:
     _app.add_api_route("/files/touch", _fm_touch_file, methods=["POST"], response_model=None)
 
     # ── Wire routes ───────────────────────────────────────────
-    _app.get("/health")(gk._handle_health)
-    _app.post("/api/squad/relay")(gk._handle_relay)
-    _app.post("/api/squad/tasks")(gk._handle_tasks_post)
-    _app.get("/api/squad/tasks")(gk._handle_tasks_get)
-    _app.get("/api/squad/sessions")(gk._handle_sessions)
+    _app.state.gatekeeper = gk
+    _app.get("/health")(handle_health)
+    _app.post("/api/squad/relay")(handle_relay)
+    _app.post("/api/squad/tasks")(handle_tasks_post)
+    _app.get("/api/squad/tasks")(handle_tasks_get)
+    _app.get("/api/squad/sessions")(handle_sessions)
     _app.api_route("/api/squad/sessions/{path:path}",
-                   methods=["GET", "POST", "DELETE"])(gk._handle_sessions_sub)
-    _app.get("/reset-setup")(gk._handle_reset_setup)
-    _app.get("/")(gk._handle_index)
+                   methods=["GET", "POST", "DELETE"])(handle_sessions_sub)
+    _app.get("/reset-setup")(handle_reset_setup)
+    _app.get("/")(handle_index)
     _app.api_route("/{path:path}",
-                   methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])(gk._handle_catch_all)
+                   methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])(handle_catch_all)
     _app.websocket("/{path:path}")(gk._handle_ws_proxy)
 
     return _app
