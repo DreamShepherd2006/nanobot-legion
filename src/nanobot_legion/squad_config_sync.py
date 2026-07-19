@@ -114,9 +114,6 @@ def _build_allowed_env_keys():
     keys.update([
         'SQUAD_LEGION',
         'NANOBOT_TOKEN',
-        'COMMANDER_WHITELIST',
-        'USER_AGENT_MAP',
-        'SQUAD_ROSTER',
         'SQUAD_RELAY_TOKEN',
     ])
     return sorted(keys)
