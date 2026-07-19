@@ -787,16 +787,26 @@ async def delete_permanent_agent(request: Request):
     if name in whitelist:
         whitelist.remove(name)
         squad_cfg["resurrection_whitelist"] = whitelist
-        try:
-            save_config(squad_cfg)
-        except OSError:
-            pass
 
-    # Permanently delete
+    # Remove peer entry from squad_config.json
+    peers = squad_cfg.get("peers", {})
+    if name in peers:
+        del peers[name]
+        squad_cfg["peers"] = peers
+
+    # Permanently delete directory
     try:
         shutil.rmtree(dir_path)
     except OSError as e:
         return JSONResponse({"ok": False, "error": f"删除目录失败: {e}"}, status_code=500)
+
+    # Save config and sync roster
+    try:
+        save_config(squad_cfg)
+    except OSError as e:
+        return JSONResponse({"ok": False, "error": f"保存配置失败: {e}"}, status_code=500)
+
+    _sync_roster(request.app.state.gatekeeper, squad_cfg)
 
     return JSONResponse({
         "ok": True,
