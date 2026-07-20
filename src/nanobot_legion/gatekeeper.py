@@ -128,7 +128,7 @@ class Gatekeeper:
         self._nanobot_version = self._detect_nanobot_version()
 
         # ── Tokens ────────────────────────────────────────────
-         self._relay_token = get_relay_token()
+        self._relay_token = get_relay_token()
         self._relay_timeout = get_relay_timeout()
         self._resurrection_whitelist = get_resurrection_whitelist()
 
