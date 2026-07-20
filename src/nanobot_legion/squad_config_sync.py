@@ -111,10 +111,10 @@ def _build_allowed_env_keys():
         if key.startswith('NANOBOT_PEER_'):
             keys.add(key)
     # Squad operational keys
+    # SQUAD_RELAY_TOKEN moved to squad_config.json — gatekeeper + push_tasks read from there.
     keys.update([
         'SQUAD_LEGION',
         'NANOBOT_TOKEN',
-        'SQUAD_RELAY_TOKEN',
     ])
     return sorted(keys)
 
@@ -191,6 +191,15 @@ def sync_configs():
 
                     # Inject dynamic allowed_env_keys
                     allowed = _build_allowed_env_keys()
+                    # SQUAD_RELAY_TOKEN: only webui_agent (commander) needs it for push_tasks.py
+                    try:
+                        with open(os.environ.get('SQUAD_CONFIG_PATH', '/app/squad_config.json')) as f:
+                            _sc = json.load(f)
+                        _webui = _sc.get("webui_agent", "neo")
+                    except Exception:
+                        _webui = "neo"
+                    if name == _webui:
+                        allowed.append("SQUAD_RELAY_TOKEN")
                     cfg.setdefault("tools", {}).setdefault("exec", {})["allowed_env_keys"] = allowed
 
                     cfg_path.write_text(
@@ -261,6 +270,9 @@ def sync_configs():
 
             # Merge dynamic allowed_env_keys
             allowed = _build_allowed_env_keys()
+            # SQUAD_RELAY_TOKEN: only webui_agent (commander) needs it for push_tasks.py
+            if inst_name == webui_agent:
+                allowed.append("SQUAD_RELAY_TOKEN")
             tools_cfg = cfg.setdefault("tools", {})
             exec_cfg = tools_cfg.setdefault("exec", {})
             existing = set(exec_cfg.get("allowed_env_keys", []))

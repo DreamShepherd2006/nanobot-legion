@@ -4,7 +4,10 @@
   "deploy_platform": "hf-staging",
   "data_root": "/data",
   "webui_agent": "neo",
-  "commander_whitelist": ["Stone2006", "DreamShepherd2006"],
+  "commander_whitelist": [
+    "Stone2006",
+    "DreamShepherd2006"
+  ],
   "user_agent_map": {
     "DreamShepherd": "medic",
     "Stone2006": "neo"
@@ -13,7 +16,14 @@
   "gatekeeper_port": 7860,
   "dlq_dir": "/data/dlq",
   "peers": {
-    "neo": {"id": "squad:commander", "gateway_port": 20001, "ws_port": 20002}
+    "neo": {
+      "id": "squad:commander",
+      "gateway_port": 20001,
+      "ws_port": 20002
+    }
   },
-  "resurrection_whitelist": ["neo"]
+  "resurrection_whitelist": [
+    "neo"
+  ],
+  "squad_relay_token": ""
 }

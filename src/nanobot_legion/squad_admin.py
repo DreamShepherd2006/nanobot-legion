@@ -19,7 +19,7 @@ _COMMANDER_HTML = """\
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Commander 白名单</title>
+<title>Squad 管理</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -52,12 +52,25 @@ _COMMANDER_HTML = """\
            opacity: 0; transition: opacity 0.3s; }
   .toast.ok { background: #1e8e3e; }
   .toast.err { background: #c5221f; }
-  .toast.show { opacity: 1; }
+   .toast.show { opacity: 1; }
+   /* ── Relay token ── */
+   .token-section { border-top: 1px solid #dadce0; margin-top: 1.5rem; padding-top: 1.25rem; }
+   .token-section h3 { font-size: 1rem; margin: 0 0 0.25rem; }
+   .token-row { display: flex; gap: 0.4rem; margin-top: 0.6rem; }
+   .token-row input { flex: 1; font-family: monospace; font-size: 0.85rem;
+                      border: 1px solid #dadce0; border-radius: 6px; padding: 0.45rem 0.6rem; }
+   .token-row input:focus { outline: none; border-color: #1a73e8; }
+   .btn-eye { background: none; border: 1px solid #dadce0; border-radius: 6px;
+              cursor: pointer; padding: 0.45rem 0.6rem; font-size: 0.9rem; }
+   .btn-eye:hover { background: #f1f3f4; }
+   .btn-save { background: #1a73e8; color: #fff; border: none; border-radius: 6px;
+               cursor: pointer; padding: 0.45rem 1rem; font-size: 0.85rem; font-weight: 500; }
+   .btn-save:hover { background: #1557b0; }
 </style>
 </head>
 <body>
-<h1>🛡️ Commander 白名单</h1>
-<p class="sub">白名单中的用户可通过 relay 向任意 agent 发送指令。</p>
+<h1>🛡️ Squad 管理</h1>
+<p class="sub">管理 Commander 白名单与 Squad Relay Token。</p>
 
 <div class="card">
 <ul id="list">{list_html}</ul>
@@ -66,6 +79,16 @@ _COMMANDER_HTML = """\
 <div class="add-row">
   <input id="new-user" placeholder="输入用户名（如 GitHub 用户名）" autocomplete="off">
   <button class="btn btn-primary" onclick="add()">➕ 添加</button>
+</div>
+
+<div class="token-section">
+   <h3>🔑 Squad Relay Token</h3>
+   <p class="sub" style="font-size:0.8rem;margin:0 0 0.5rem;">用于 squad relay 认证（Neo push_tasks → Gatekeeper）</p>
+   <div class="token-row">
+      <input id="token-val" type="password" placeholder="（未设置）" autocomplete="off" value="{relay_token}">
+      <button class="btn-eye" onclick="toggleToken()">👁</button>
+      <button class="btn-save" onclick="saveToken()">💾 保存</button>
+   </div>
 </div>
 
 <a class="back" href="javascript:history.back()">← 返回</a>
@@ -104,6 +127,27 @@ function toast(msg, ok) {
   t.textContent = msg;
   t.className = 'toast ' + (ok ? 'ok' : 'err') + ' show';
   setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+function toggleToken() {
+  const inp = document.getElementById('token-val');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}
+
+async function saveToken() {
+  const inp = document.getElementById('token-val');
+  const token = inp.value.trim();
+  try {
+    const resp = await fetch('/config/commander/relay-token', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({squad_relay_token: token})
+    });
+    const data = await resp.json();
+    toast(data.ok ? '✅ 已保存' : '保存失败', data.ok);
+  } catch (e) {
+    toast('❌ 请求失败: ' + e.message, false);
+  }
 }
 </script>
 </body>
@@ -220,7 +264,9 @@ def create_squad_admin_routes(app, gatekeeper):
             )
         else:
             items = '<li class="empty">尚无白名单条目</li>'
-        return HTMLResponse(_COMMANDER_HTML.replace("{list_html}", items))
+        relay_token = _esc(str(cfg.get("squad_relay_token", "") or ""))
+        html = _COMMANDER_HTML.replace("{list_html}", items).replace("{relay_token}", relay_token)
+        return HTMLResponse(html)
 
     async def _commander_add(request: Request):
         _su = request.session.get("user")
@@ -270,6 +316,26 @@ def create_squad_admin_routes(app, gatekeeper):
         save_config(cfg)
         gatekeeper._platform._commander_whitelist = whitelist
         return JSONResponse({"ok": True})
+
+    async def _commander_relay_token(request: Request):
+        _su = request.session.get("user")
+        if not _su:
+            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_su):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "无效请求"}, status_code=400)
+        token = str(body.get("squad_relay_token", "")).strip()
+        cfg = load_config(force_reload=True)
+        old_token = str(cfg.get("squad_relay_token", "") or "")
+        cfg["squad_relay_token"] = token
+        save_config(cfg)
+        # Update gatekeeper's cached relay token in-memory
+        gatekeeper._relay_token = token
+        print(f"[commander] relay token: {'更新' if token else '清空'}", flush=True)
+        return JSONResponse({"ok": True, "updated": old_token != token})
 
     # ── User-agent mapping ───────────────────────────────────────────
 
@@ -333,6 +399,7 @@ def create_squad_admin_routes(app, gatekeeper):
     app.add_route("/config/commander", _commander_page, methods=["GET"])
     app.add_route("/config/commander/add", _commander_add, methods=["POST"])
     app.add_route("/config/commander/remove", _commander_remove, methods=["POST"])
+    app.add_route("/config/commander/relay-token", _commander_relay_token, methods=["POST"])
     app.add_route("/config/user-agent-map", _user_agent_map_page, methods=["GET"])
     app.add_route("/config/user-agent-map/save", _user_agent_map_save, methods=["POST"])
 
