@@ -89,17 +89,6 @@ def _env_override(config: dict):
     if v:
         config["webui_agent"] = v
 
-    v = os.environ.get("COMMANDER_WHITELIST", "")
-    if v:
-        config["commander_whitelist"] = [n.strip() for n in v.split(",") if n.strip()]
-
-    v = os.environ.get("USER_AGENT_MAP", "")
-    if v:
-        try:
-            config["user_agent_map"] = json.loads(v)
-        except json.JSONDecodeError:
-            pass
-
     v = os.environ.get("RELAY_TIMEOUT", "")
     if v:
         try:
