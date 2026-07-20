@@ -115,6 +115,7 @@ def _build_allowed_env_keys():
     keys.update([
         'SQUAD_LEGION',
         'NANOBOT_TOKEN',
+        'SQUAD_CONFIG_PATH',
     ])
     return sorted(keys)
 
