@@ -65,8 +65,18 @@ _COMMANDER_HTML = """\
    .btn-eye:hover { background: #f1f3f4; }
    .btn-save { background: #1a73e8; color: #fff; border: none; border-radius: 6px;
                cursor: pointer; padding: 0.45rem 1rem; font-size: 0.85rem; font-weight: 500; }
-   .btn-save:hover { background: #1557b0; }
-</style>
+    .btn-save:hover { background: #1557b0; }
+    /* ── Relay peers ── */
+    .peers-section { border-top: 1px solid #dadce0; margin-top: 1.5rem; padding-top: 1.25rem; }
+    .peers-section h3 { font-size: 1rem; margin: 0 0 0.25rem; }
+    .peer-table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+    .peer-table th, .peer-table td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid #eee; font-size: 0.85rem; }
+    .peer-table th { font-size: 0.75rem; color: #888; }
+    .peer-table code { font-size: 0.8rem; background: #f1f3f4; padding: 1px 4px; border-radius: 3px; word-break: break-all; }
+    .peer-token { border: 1px solid #dadce0; border-radius: 4px; padding: 0.25rem 0.4rem; font-size: 0.8rem; font-family: monospace; width: 160px; }
+    .btn-sm { background: none; border: 1px solid #dadce0; border-radius: 4px; cursor: pointer; padding: 0.2rem 0.4rem; font-size: 0.8rem; margin-left: 0.25rem; }
+    .btn-sm:hover { background: #f1f3f4; }
+ </style>
 </head>
 <body>
 <h1>🛡️ Squad 管理</h1>
@@ -89,9 +99,20 @@ _COMMANDER_HTML = """\
       <button class="btn-eye" onclick="toggleToken()">👁</button>
       <button class="btn-save" onclick="saveToken()">💾 保存</button>
    </div>
-</div>
+ </div>
 
-<a class="back" href="javascript:history.back()">← 返回</a>
+ <div class="peers-section">
+    <h3>🔗 跨空间 Relay Peers</h3>
+    <p class="sub" style="font-size:0.8rem;margin:0 0 0.5rem;">目标空间完整域名 → relay token。用于 squad_bridge_cross.py 跨空间通信。</p>
+    {relay_peers_html}
+    <div class="add-row" style="margin-top:0.75rem;">
+      <input id="new-domain" placeholder="空间域名（如 xxx.hf.space）" autocomplete="off" style="flex:2;">
+      <input id="new-peer-token" type="password" placeholder="Relay Token" autocomplete="off" style="flex:3;">
+      <button class="btn btn-primary" onclick="addPeer()">➕ 添加</button>
+    </div>
+ </div>
+
+ <a class="back" href="javascript:history.back()">← 返回</a>
 
 <div id="toast" class="toast"></div>
 
@@ -145,11 +166,42 @@ async function saveToken() {
     });
     const data = await resp.json();
     toast(data.ok ? '✅ 已保存' : '保存失败', data.ok);
-  } catch (e) {
-    toast('❌ 请求失败: ' + e.message, false);
-  }
-}
-</script>
+   } catch (e) {
+     toast('❌ 请求失败: ' + e.message, false);
+   }
+ }
+
+ async function addPeer() {
+   const domain = document.getElementById('new-domain').value.trim();
+   const token = document.getElementById('new-peer-token').value.trim();
+   if (!domain || !token) { toast('域名和 token 不能为空', false); return; }
+   const resp = await fetch('/config/commander/relay-peer/add', {
+     method: 'POST',
+     headers: {'Content-Type': 'application/json'},
+     body: JSON.stringify({domain, token})
+   });
+   const data = await resp.json();
+   toast(data.ok ? `✅ 已添加 ${domain}` : `❌ ${data.error}`, data.ok);
+   if (data.ok) location.reload();
+ }
+
+ async function removePeer(domain) {
+   if (!confirm(`移除 ${domain}？`)) return;
+   const resp = await fetch('/config/commander/relay-peer/remove', {
+     method: 'POST',
+     headers: {'Content-Type': 'application/json'},
+     body: JSON.stringify({domain})
+   });
+   const data = await resp.json();
+   toast(data.ok ? `✅ 已移除 ${domain}` : `❌ ${data.error}`, data.ok);
+   if (data.ok) location.reload();
+ }
+
+  function togglePeerToken(domain) {
+    const inp = document.getElementById('pt-' + domain.replace(/\\./g, '-'));
+    if (inp) inp.type = inp.type === 'password' ? 'text' : 'password';
+ }
+ </script>
 </body>
 </html>"""
 
@@ -265,7 +317,20 @@ def create_squad_admin_routes(app, gatekeeper):
         else:
             items = '<li class="empty">尚无白名单条目</li>'
         relay_token = _esc(str(cfg.get("squad_relay_token", "") or ""))
-        html = _COMMANDER_HTML.replace("{list_html}", items).replace("{relay_token}", relay_token)
+        # ── relay_peers HTML ──
+        peers = cfg.get("relay_peers", {})
+        if peers:
+            peer_rows = "".join(
+                f'<tr><td><code>{_esc(d)}</code></td>'
+                f'<td><input type="password" value="{_esc(t)}" readonly class="peer-token" id="pt-{_esc(d.replace(".", "-"))}">'
+                f'<button class="btn-sm" onclick="togglePeerToken(\'{_esc_js(d)}\')">👁</button></td>'
+                f'<td><button class="btn btn-danger" onclick="removePeer(\'{_esc_js(d)}\')">✕ 移除</button></td></tr>'
+                for d, t in sorted(peers.items())
+            )
+            peer_html = f'<table class="peer-table"><thead><tr><th>域名</th><th>Token</th><th></th></tr></thead><tbody>{peer_rows}</tbody></table>'
+        else:
+            peer_html = '<p class="empty">暂无跨空间 relay peer</p>'
+        html = _COMMANDER_HTML.replace("{list_html}", items).replace("{relay_token}", relay_token).replace("{relay_peers_html}", peer_html)
         return HTMLResponse(html)
 
     async def _commander_add(request: Request):
@@ -337,6 +402,49 @@ def create_squad_admin_routes(app, gatekeeper):
         print(f"[commander] relay token: {'更新' if token else '清空'}", flush=True)
         return JSONResponse({"ok": True, "updated": old_token != token})
 
+    async def _commander_relay_peer_add(request: Request):
+        _su = request.session.get("user")
+        if not _su:
+            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_su):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "无效请求"}, status_code=400)
+        domain = body.get("domain", "").strip()
+        token = body.get("token", "").strip()
+        if not domain or not token:
+            return JSONResponse({"ok": False, "error": "域名和 token 不能为空"}, status_code=400)
+        cfg = load_config(force_reload=True)
+        peers = cfg.setdefault("relay_peers", {})
+        if domain in peers:
+            return JSONResponse({"ok": False, "error": f"'{domain}' 已存在"}, status_code=409)
+        peers[domain] = token
+        save_config(cfg)
+        return JSONResponse({"ok": True})
+
+    async def _commander_relay_peer_remove(request: Request):
+        _su = request.session.get("user")
+        if not _su:
+            return JSONResponse({"ok": False, "error": "请先登录"}, status_code=401)
+        if not gatekeeper._platform.is_commander(_su):
+            return JSONResponse({"ok": False, "error": "仅 Commander 可操作"}, status_code=403)
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "无效请求"}, status_code=400)
+        domain = body.get("domain", "").strip()
+        if not domain:
+            return JSONResponse({"ok": False, "error": "域名不能为空"}, status_code=400)
+        cfg = load_config(force_reload=True)
+        peers = cfg.setdefault("relay_peers", {})
+        if domain not in peers:
+            return JSONResponse({"ok": False, "error": f"'{domain}' 不存在"}, status_code=404)
+        del peers[domain]
+        save_config(cfg)
+        return JSONResponse({"ok": True})
+
     # ── User-agent mapping ───────────────────────────────────────────
 
     async def _user_agent_map_page(request: Request):
@@ -400,6 +508,8 @@ def create_squad_admin_routes(app, gatekeeper):
     app.add_route("/config/commander/add", _commander_add, methods=["POST"])
     app.add_route("/config/commander/remove", _commander_remove, methods=["POST"])
     app.add_route("/config/commander/relay-token", _commander_relay_token, methods=["POST"])
+    app.add_route("/config/commander/relay-peer/add", _commander_relay_peer_add, methods=["POST"])
+    app.add_route("/config/commander/relay-peer/remove", _commander_relay_peer_remove, methods=["POST"])
     app.add_route("/config/user-agent-map", _user_agent_map_page, methods=["GET"])
     app.add_route("/config/user-agent-map/save", _user_agent_map_save, methods=["POST"])
 

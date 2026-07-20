@@ -44,5 +44,6 @@
   "resurrection_whitelist": [
     "neo"
   ],
-  "squad_relay_token": ""
+  "squad_relay_token": "",
+  "relay_peers": {}
 }

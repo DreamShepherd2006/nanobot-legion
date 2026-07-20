@@ -42,8 +42,6 @@
         "NANOBOT_PEER_SENTINEL",
         "NANOBOT_PEER_MEDIC",
         "NANOBOT_PEER_ASSISTANT",
-        "SQUAD_RELAY_TOKEN",
-        "SQUAD_RELAY_TOKEN_HF_NanobotNightly",
         "COMMANDER_WHITELIST",
         "USER_AGENT_MAP"
       ]

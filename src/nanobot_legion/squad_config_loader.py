@@ -50,6 +50,7 @@ _DEFAULTS: dict = {
     "commander_whitelist": [],
     "user_agent_map": {},
     "squad_relay_token": "",
+    "relay_peers": {},
     "data_root": "/data",
     "relay_timeout": 60,
     "gatekeeper_port": 7860,
@@ -156,8 +157,18 @@ def get_relay_timeout() -> int:
 
 
 def get_relay_token() -> str:
-    """获取 squad relay token。优先 squad_config.json，其次 env SQUAD_RELAY_TOKEN。"""
+    """获取本空间的 squad relay token。优先 squad_config.json，其次 env SQUAD_RELAY_TOKEN。"""
     return str(load_config().get("squad_relay_token", "") or "")
+
+
+def get_relay_peers() -> dict:
+    """返回跨空间 relay peers: {domain: token}。"""
+    return load_config().get("relay_peers", {})
+
+
+def get_relay_token_for(domain: str) -> str:
+    """根据目标空间域名获取 relay token。"""
+    return str(get_relay_peers().get(domain, "") or "")
 
 
 def get_resurrection_whitelist() -> set:
