@@ -1,7 +1,6 @@
 {
   "_comment": "Squad non-sensitive config for HF Staging (DreamShepherd2006/Nanobot-Staging)",
   "deploy_platform": "hf-staging",
-  "data_root": "/data",
   "webui_agent": "neo",
   "commander_whitelist": [
     "Stone2006",

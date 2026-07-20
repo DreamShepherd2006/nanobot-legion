@@ -1,7 +1,6 @@
 {
   "_comment": "Squad non-sensitive config for ModelScope Staging (Stone2006/nanobot-multi-agent-nightly)",
   "deploy_platform": "modelscope",
-  "data_root": "/mnt/workspace",
   "webui_agent": "neo",
   "commander_whitelist": [
     "Stone2006",

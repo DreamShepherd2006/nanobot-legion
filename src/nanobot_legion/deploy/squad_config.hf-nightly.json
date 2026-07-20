@@ -1,7 +1,6 @@
 {
   "_comment": "Squad non-sensitive config for HF Nightly (DreamShepherd2006/nanobot-multi-agent-nightly)",
   "deploy_platform": "hf-direct",
-  "data_root": "/data",
   "webui_agent": "neo",
   "commander_whitelist": [
     "Stone2006",

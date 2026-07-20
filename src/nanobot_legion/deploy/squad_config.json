@@ -2,7 +2,6 @@
   "_comment": "Squad 非敏感配置 — git 版本管理，ModelScope 不可回读 env 时仍可维护",
   "_deploy_platform_doc": "平台自动检测: 设置 deploy_platform 字段或在环境中设 DEPLOY_PLATFORM。支持: modelscope | hf-staging | hf-direct",
   "deploy_platform": "hf-staging",
-  "data_root": "/data",
   "webui_agent": "neo",
   "commander_whitelist": [
     "Stone2006",
