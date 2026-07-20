@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""
+Cross-space / intra-space relay bridge — decoupled from agent internals.
+
+Examples
+    python3 /app/squad_bridge_cross.py neo neo dreamshepherd2006-nanobot-staging.hf.space "hi"
+    python3 /app/squad_bridge_cross.py sentinel trinity stone2006-nanobot-multi-agent-nightly.ms.show "check pr"
+
+Token source: squad_config.json → relay_peers（跨空间 relay 鉴权 token 的统一来源）。
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+import urllib.request
+import urllib.error
+
+
+# ── config loader ────────────────────────────────────────────
+
+def _load_config():
+    path = os.environ.get("SQUAD_CONFIG_PATH", "/app/squad_config.json")
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _get_relay_peers():
+    return _load_config().get("relay_peers", {})
+
+
+def _get_local_token():
+    return str(_load_config().get("squad_relay_token", "") or "")
+
+
+# ── space detection ───────────────────────────────────────────
+
+def _detect_current_space():
+    """Return the current space's host domain, or empty str."""
+    sid = (os.environ.get("SPACE_ID") or "").lower()
+    # HuggingFace
+    if sid.endswith("nanobot-staging"):
+        return "dreamshepherd2006-nanobot-staging.hf.space"
+    if "multi-agent-nightly" in sid:
+        return "dreamshepherd2006-nanobot-multi-agent-nightly.hf.space"
+    # ModelScope
+    if os.environ.get("MODELSCOPE_ENVIRONMENT") == "studio":
+        return "stone2006-nanobot-multi-agent-nightly.ms.show"
+    return ""
+
+
+# ── relay ─────────────────────────────────────────────────────
+
+def _relay(sender: str, target: str, domain: str, msg: str):
+    peers = _get_relay_peers()
+    token = peers.get(domain, "")
+    if not token:
+        # Fallback: local token for same-space relay
+        cur = _detect_current_space()
+        if cur and cur == domain:
+            token = _get_local_token()
+        if not token:
+            print(json.dumps({"status": "error", "error": f"no token configured for '{domain}'"}))
+            sys.exit(1)
+
+    url = f"https://{domain}/api/squad/relay"
+    payload = json.dumps({"sender": sender, "target": target, "message": msg}).encode()
+    req = urllib.request.Request(
+        url, data=payload,
+        headers={"Content-Type": "application/json", "X-Squad-Token": token},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            body = json.loads(resp.read().decode())
+        print(json.dumps(body, ensure_ascii=False))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        print(json.dumps({"status": "error", "http": e.code, "body": body[:500]},
+                         ensure_ascii=False))
+        sys.exit(1)
+    except Exception as e:
+        print(json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False))
+        sys.exit(1)
+
+
+# ── main ──────────────────────────────────────────────────────
+
+def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "--list":
+        peers = _get_relay_peers()
+        print(json.dumps(peers, indent=2, ensure_ascii=False))
+        return
+
+    if len(sys.argv) < 5:
+        print("Usage: python3 squad_bridge_cross.py <sender> <target> <domain> <message>")
+        print("       python3 squad_bridge_cross.py --list")
+        sys.exit(2)
+
+    sender = sys.argv[1]
+    target = sys.argv[2]
+    domain = sys.argv[3]
+    msg = sys.argv[4]
+    _relay(sender, target, domain, msg)
+
+
+if __name__ == "__main__":
+    main()
