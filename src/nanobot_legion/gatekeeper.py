@@ -43,7 +43,7 @@ import websockets
 # IMPORTANT: squad_config_loader must be imported BEFORE platforms!
 # It injects DEPLOY_PLATFORM into os.environ at module level, which
 # platforms.__init__._detect() reads in its matches() step 0.
-from .squad_config_loader import get_relay_timeout, get_resurrection_whitelist, load_config  # noqa: E402
+from .squad_config_loader import get_relay_timeout, get_relay_token, get_resurrection_whitelist, load_config  # noqa: E402
 from cloud_agent_gateway.platforms import platform  # noqa: E402
 from .gatekeeper_monitor import legion_monitor_loop  # noqa: E402
 from .gatekeeper_binding_chat import ensure_pinned_binding_chat  # noqa: E402
@@ -128,7 +128,7 @@ class Gatekeeper:
         self._nanobot_version = self._detect_nanobot_version()
 
         # ── Tokens ────────────────────────────────────────────
-        self._relay_token = os.environ.get("SQUAD_RELAY_TOKEN", "").strip()
+        self._relay_token = get_relay_token()
         self._relay_timeout = get_relay_timeout()
         self._resurrection_whitelist = get_resurrection_whitelist()
 

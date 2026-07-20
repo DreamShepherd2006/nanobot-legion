@@ -70,11 +70,11 @@ Legion 多智能体编制管理。Commander (neo) 由初始化配置生成。
 
  ---
 
- # 🛡️ Commander 白名单
+ # 🛡️ Squad 管理
 
- 控制哪些用户可通过 relay 跨空间调度 agent：
+ Commander 白名单与 Relay Token 配置：
 
- 👉 [`配置白名单`](/config/commander)
+ 👉 [`管理`](/config/commander)
 
  ---
 

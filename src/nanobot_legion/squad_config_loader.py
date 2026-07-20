@@ -49,6 +49,8 @@ _DEFAULTS: dict = {
     "owner": "",
     "commander_whitelist": [],
     "user_agent_map": {},
+    "squad_relay_token": "",
+    "relay_peers": {},
     "data_root": "/data",
     "relay_timeout": 60,
     "gatekeeper_port": 7860,
@@ -100,11 +102,14 @@ def _env_override(config: dict):
     if v:
         config["dlq_dir"] = v
 
-    # 密钥类 — 仅 env fallback，不在文件中
+    # 密钥类 — env fallback，但如果 json 已有值则保留 json（WebUI 可覆盖）
     for secret_key in ["SQUAD_RELAY_TOKEN", "SESSION_SECRET"]:
+        field = secret_key.lower()
+        if config.get(field):
+            continue  # json 已有值，不覆盖
         v = os.environ.get(secret_key, "")
         if v:
-            config[secret_key.lower()] = v
+            config[field] = v
 
     # Peers — 只从 squad_config.json 读取，不再从 NANOBOT_PEER_* env 合并
     # （env 合并会丢失 zone 等字段，导致 zone 过滤失效）
@@ -149,6 +154,27 @@ def get_user_agent_map() -> dict:
 
 def get_relay_timeout() -> int:
     return load_config().get("relay_timeout", 60)
+
+
+def get_relay_token() -> str:
+    """获取本空间的 squad relay token。
+
+    优先级：squad_config.json 的 squad_relay_token → SQUAD_RELAY_TOKEN env（面板兜底）
+    """
+    token = str(load_config().get("squad_relay_token", "") or "")
+    if not token:
+        token = os.environ.get("SQUAD_RELAY_TOKEN", "")
+    return token
+
+
+def get_relay_peers() -> dict:
+    """返回跨空间 relay peers: {domain: token}。"""
+    return load_config().get("relay_peers", {})
+
+
+def get_relay_token_for(domain: str) -> str:
+    """根据目标空间域名获取 relay token。"""
+    return str(get_relay_peers().get(domain, "") or "")
 
 
 def get_resurrection_whitelist() -> set:

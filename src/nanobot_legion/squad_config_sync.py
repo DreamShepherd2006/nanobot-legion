@@ -111,10 +111,11 @@ def _build_allowed_env_keys():
         if key.startswith('NANOBOT_PEER_'):
             keys.add(key)
     # Squad operational keys
+    # SQUAD_RELAY_TOKEN moved to squad_config.json — gatekeeper + push_tasks read from there.
     keys.update([
         'SQUAD_LEGION',
         'NANOBOT_TOKEN',
-        'SQUAD_RELAY_TOKEN',
+        'SQUAD_CONFIG_PATH',
     ])
     return sorted(keys)
 

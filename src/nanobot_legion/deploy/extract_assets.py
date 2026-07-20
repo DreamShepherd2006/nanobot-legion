@@ -14,6 +14,8 @@ ASSETS = [
     ('launch.sh', 'deploy/huggingface/launch.sh'),
     'scripts/resurrect_neo.sh',
     ('entrypoint.sh', 'entrypoint.sh'),
+    # Python scripts
+    'squad_bridge_cross.py',
 ]
 
 

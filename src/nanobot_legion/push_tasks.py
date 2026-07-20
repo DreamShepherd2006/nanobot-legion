@@ -30,7 +30,21 @@ import urllib.error
 import urllib.request
 
 GATEKEEPER_URL = os.environ.get("GATEKEEPER_URL", "http://127.0.0.1:7860")
-RELAY_TOKEN = os.environ.get("SQUAD_RELAY_TOKEN", "")
+RELAY_TOKEN = ""  # read from squad_config.json at module load
+
+
+def _init_token():
+    global RELAY_TOKEN
+    config_path = os.environ.get("SQUAD_CONFIG_PATH", "/app/squad_config.json")
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+        RELAY_TOKEN = str(cfg.get("squad_relay_token", "") or "")
+    except Exception:
+        RELAY_TOKEN = ""
+
+
+_init_token()
 
 
 def push(payload: dict) -> dict:
