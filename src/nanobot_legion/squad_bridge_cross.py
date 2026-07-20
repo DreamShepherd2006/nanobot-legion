@@ -6,7 +6,7 @@ Examples
     python3 /app/squad_bridge_cross.py neo neo dreamshepherd2006-nanobot-staging.hf.space "hi"
     python3 /app/squad_bridge_cross.py sentinel trinity stone2006-nanobot-multi-agent-nightly.ms.show "check pr"
 
-Token source: squad_config.json → relay_peers（跨空间 relay 鉴权 token 的统一来源）。
+Token 通过 squad_config_loader 统一查询（支持 SQUAD_RELAY_TOKEN env 面板兜底）。
 """
 from __future__ import annotations
 
@@ -17,24 +17,7 @@ import time
 import urllib.request
 import urllib.error
 
-
-# ── config loader ────────────────────────────────────────────
-
-def _load_config():
-    path = os.environ.get("SQUAD_CONFIG_PATH", "/app/squad_config.json")
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def _get_relay_peers():
-    return _load_config().get("relay_peers", {})
-
-
-def _get_local_token():
-    return str(_load_config().get("squad_relay_token", "") or "")
+from nanobot_legion.squad_config_loader import get_relay_peers, get_relay_token, get_relay_token_for
 
 
 # ── space detection ───────────────────────────────────────────
@@ -56,13 +39,12 @@ def _detect_current_space():
 # ── relay ─────────────────────────────────────────────────────
 
 def _relay(sender: str, target: str, domain: str, msg: str):
-    peers = _get_relay_peers()
-    token = peers.get(domain, "")
+    token = get_relay_token_for(domain)
     if not token:
         # Fallback: local token for same-space relay
         cur = _detect_current_space()
         if cur and cur == domain:
-            token = _get_local_token()
+            token = get_relay_token()
         if not token:
             print(json.dumps({"status": "error", "error": f"no token configured for '{domain}'"}))
             sys.exit(1)
@@ -91,7 +73,7 @@ def _relay(sender: str, target: str, domain: str, msg: str):
 
 def main():
     if len(sys.argv) >= 2 and sys.argv[1] == "--list":
-        peers = _get_relay_peers()
+        peers = get_relay_peers()
         print(json.dumps(peers, indent=2, ensure_ascii=False))
         return
 

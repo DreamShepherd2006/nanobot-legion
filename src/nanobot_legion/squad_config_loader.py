@@ -157,8 +157,14 @@ def get_relay_timeout() -> int:
 
 
 def get_relay_token() -> str:
-    """获取本空间的 squad relay token。优先 squad_config.json，其次 env SQUAD_RELAY_TOKEN。"""
-    return str(load_config().get("squad_relay_token", "") or "")
+    """获取本空间的 squad relay token。
+
+    优先级：squad_config.json 的 squad_relay_token → SQUAD_RELAY_TOKEN env（面板兜底）
+    """
+    token = str(load_config().get("squad_relay_token", "") or "")
+    if not token:
+        token = os.environ.get("SQUAD_RELAY_TOKEN", "")
+    return token
 
 
 def get_relay_peers() -> dict:
