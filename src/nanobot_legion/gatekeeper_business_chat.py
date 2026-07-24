@@ -54,7 +54,7 @@ def ensure_business_management_chat(gatekeeper) -> None:
 
 ---
 
-> 💡 **提示**：凭证文件存储在 `/data/credentials/` 目录下，容器重启后保留。
+> 💡 **提示**：凭证文件存储在 `{_platform.data_root}/credentials/` 目录下，容器重启后保留。
 """
 
     _cid = str(_uuid.uuid4())
