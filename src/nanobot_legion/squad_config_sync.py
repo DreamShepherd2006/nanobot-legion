@@ -305,8 +305,8 @@ def inject_mcp_from_specs(cfg_path: str) -> bool:
 
     try:
         with open(cfg_path) as f:
-            cfg = _json.load(f)
-    except (FileNotFoundError, _json.JSONDecodeError):
+            cfg = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
         return False
 
     _tools = cfg.setdefault("tools", {})
@@ -331,7 +331,7 @@ def inject_mcp_from_specs(cfg_path: str) -> bool:
 
     if _changed:
         with open(cfg_path, "w") as f:
-            _json.dump(cfg, f, indent=2, ensure_ascii=False)
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
 
     return _changed
 
