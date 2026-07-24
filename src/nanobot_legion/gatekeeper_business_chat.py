@@ -62,7 +62,7 @@ def ensure_business_management_chat(gatekeeper) -> None:
     _session_key = f"{_BUSINESS_PROJECT}/{_BUSINESS_CHAT_TITLE}/{_session_id}"
 
     # ── Distribute to all roster agents ───────────────────────
-    for _agent_name in gatekeeper.roster:
+    for _agent_name in gatekeeper.agent_names:
         _inst_dir = f"{gatekeeper._platform.data_root}/legion/instances/{_agent_name}"
         _ws_dir = f"{_inst_dir}/workspace"
         _project_dir_agent = f"{_ws_dir}/{_BUSINESS_PROJECT}/{_BUSINESS_CHAT_TITLE}"
@@ -114,7 +114,7 @@ def ensure_business_management_chat(gatekeeper) -> None:
             pass
 
     # ── Write sidebar-state.json for each agent ───────────────
-    for _agent_name in gatekeeper.roster:
+    for _agent_name in gatekeeper.agent_names:
         _inst_dir = f"{gatekeeper._platform.data_root}/legion/instances/{_agent_name}"
         _sidebar_path = f"{_inst_dir}/sidebar-state.json"
         try:
