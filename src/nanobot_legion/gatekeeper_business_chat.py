@@ -61,7 +61,6 @@ def ensure_business_management_chat(gatekeeper) -> None:
     _key = f"websocket:{_cid}"
 
     # ── Write session + transcript + pin for each roster agent ─
-    _webui_agent = gatekeeper._webui_agent
     for _agent_name in gatekeeper.agent_names:
         _inst_dir = _platform.instance_path(_agent_name)
 
