@@ -277,6 +277,9 @@ def sync_configs():
                 json.dump(cfg, f, indent=2, ensure_ascii=False)
             os.replace(tmp_path, cfg_path)
 
+            # Inject MCP configs from installed packages (e.g., nanobot-quant OnchainOS)
+            inject_mcp_from_specs(cfg_path)
+
             _log(f"   ✅ {inst_name}: config 已同步 {port_mark}")
         except Exception as e:
             _log(f"   ❌ {inst_name}: 写入失败 — {e}")
@@ -286,6 +289,52 @@ def sync_configs():
 
     print()
     _log("🏁 完成 — gatekeeper 通过 import 读取 roster（内存）")
+
+# ═══ 4. MCP 配置注入 ══════════════════════════════════════════
+
+def inject_mcp_from_specs(cfg_path: str) -> bool:
+    """Inject MCP server configs from nanobot_quant MCP specs."""
+    try:
+        from nanobot_quant.mcp_spec import discover as _discover_mcp
+    except ImportError:
+        return False
+
+    _specs = _discover_mcp()
+    if not _specs:
+        return False
+
+    try:
+        with open(cfg_path) as f:
+            cfg = _json.load(f)
+    except (FileNotFoundError, _json.JSONDecodeError):
+        return False
+
+    _tools = cfg.setdefault("tools", {})
+    # Remove stale camelCase key (same reason as CAG's inject_mcp_config)
+    _changed = False
+    if "mcpServers" in _tools:
+        del _tools["mcpServers"]
+        _changed = True
+    _existing = _tools.setdefault("mcp_servers", {})
+
+    for _name, _spec in _specs.items():
+        if _name not in _existing:
+            _existing[_name] = {
+                "type": "stdio",
+                "command": _spec.command,
+                "args": _spec.args,
+            }
+            _changed = True
+            _log(f"     🔌 MCP + {_name}")
+        else:
+            _log(f"     🔌 MCP   {_name} (existing, skipped)")
+
+    if _changed:
+        with open(cfg_path, "w") as f:
+            _json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+    return _changed
+
 
 # ═══ CLI 入口（向后兼容） ════════════════════════════════════
 

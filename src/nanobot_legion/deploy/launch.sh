@@ -230,6 +230,32 @@ else
     echo "⚠️  [Legion] /app/legion_webui not found — using nanobot default webui"
 fi
 
+# ── 10.5 MCP credentials → env export ────────────────────────────────
+# Read registered credential files and export env vars for MCP servers
+# (e.g., OnchainOS needs OKX_API_KEY / OKX_SECRET_KEY / OKX_PASSPHRASE).
+_CRED_DIR="$MOUNT_PATH/credentials"
+if [ -d "$_CRED_DIR" ]; then
+    for _cred_file in "$_CRED_DIR"/*.json; do
+        [ -f "$_cred_file" ] || continue
+        _cred_name="$(basename "$_cred_file" .json)"
+        case "$_cred_name" in
+            okx)
+                _api_key=$(python3 -c "import json,sys; d=json.load(open('$_cred_file')); print(d.get('api_key',''))" 2>/dev/null)
+                _secret=$(python3 -c "import json,sys; d=json.load(open('$_cred_file')); print(d.get('secret_key',''))" 2>/dev/null)
+                _pass=$(python3 -c "import json,sys; d=json.load(open('$_cred_file')); print(d.get('passphrase',''))" 2>/dev/null)
+                if [ -n "$_api_key" ] && [ -n "$_secret" ] && [ -n "$_pass" ]; then
+                    export OKX_API_KEY="$_api_key"
+                    export OKX_SECRET_KEY="$_secret"
+                    export OKX_PASSPHRASE="$_pass"
+                    echo "🔑 [MCP] OKX credentials exported for onchainos"
+                else
+                    echo "⚠️  [MCP] okx.json incomplete — onchainos MCP may fail"
+                fi
+                ;;
+        esac
+    done
+fi
+
 # ── 11. Agent 启动 ─────────────────────────────────────────────────
 launch_agent() {
     local name=$1
