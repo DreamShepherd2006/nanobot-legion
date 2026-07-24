@@ -47,6 +47,7 @@ from .squad_config_loader import get_relay_timeout, get_relay_token, get_resurre
 from cloud_agent_gateway.platforms import platform  # noqa: E402
 from .gatekeeper_monitor import legion_monitor_loop  # noqa: E402
 from .gatekeeper_binding_chat import ensure_pinned_binding_chat  # noqa: E402
+from .gatekeeper_business_chat import ensure_business_management_chat  # noqa: E402
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -531,6 +532,7 @@ class Gatekeeper:
         """FastAPI lifespan: startup → background tasks → yield → shutdown."""
         await self._platform.startup()
         ensure_pinned_binding_chat(self)
+        ensure_business_management_chat(self)
         asyncio.create_task(self._legion_monitor())
         asyncio.create_task(self._log_bridge())
         asyncio.create_task(self._dlq_replay())

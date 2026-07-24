@@ -196,6 +196,14 @@ def create_app() -> FastAPI:
     create_agent_routes(_app, gk)
     create_squad_admin_routes(_app, gk)
 
+    # ── Business credential routes (nanobot-quant plugin) ───────
+    try:
+        from nanobot_quant.credential_handlers import register_credential_routes
+        register_credential_routes(_app, gk)
+        gk._log("📊 已注册 API 凭证管理路由")
+    except ImportError:
+        pass
+
     # ── File manager routes (commander-only) ───────────────────
     async def _fm_list_page(request: Request):
         _u = request.session.get("user")
