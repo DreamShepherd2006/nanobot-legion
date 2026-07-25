@@ -273,7 +273,7 @@ if not providers:
     print(f'DIAG:NO_PROVIDERS top_keys={list(cfg.keys())}')
     raise SystemExit(0)
 for name, prov in providers.items():
-    key = prov.get('api_key') or prov.get('key', '')
+    key = prov.get('apiKey') or prov.get('api_key') or prov.get('key', '')
     if key:
         print(key)
         break
