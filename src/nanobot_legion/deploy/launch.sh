@@ -262,12 +262,20 @@ fi
 _NEO_CFG="$MOUNT_PATH/instances/neo/config.json"
 if [ -f "$_NEO_CFG" ]; then
     _DS_KEY=$(python3 -c "
-import json, os
-cfg = json.load(open('$_NEO_CFG'))
-for name, prov in cfg.get('providers', {}).items():
-    if 'deepseek' in name.lower():
-        print(prov.get('api_key', ''))
+import json, sys
+try:
+    cfg = json.load(open('$_NEO_CFG'))
+except Exception as e:
+    print(f'JSON_ERR: {e}', file=sys.stderr)
+    sys.exit(1)
+providers = cfg.get('providers', {})
+for name, prov in providers.items():
+    key = prov.get('api_key') or prov.get('key') or prov.get('api_key_env', '')
+    if key:
+        print(key)
         break
+else:
+    print(f'DIAG: provider keys={list(providers.keys())}' if providers else 'DIAG: providers empty/missing', file=sys.stderr)
 " 2>/dev/null)
     if [ -n "$_DS_KEY" ]; then
         export OPENAI_API_KEY="$_DS_KEY"
@@ -277,7 +285,7 @@ for name, prov in cfg.get('providers', {}).items():
         echo "⚠️  [MCP] DeepSeek key not found in neo config — vibe-trading MCP may fail"
     fi
 else
-    echo "⚠️  [MCP] neo config.json not found — vibe-trading MCP may fail"
+    echo "⚠️  [MCP] neo config.json not found at $_NEO_CFG — vibe-trading MCP may fail"
 fi
 
 # ── 11. Agent 启动 ─────────────────────────────────────────────────
