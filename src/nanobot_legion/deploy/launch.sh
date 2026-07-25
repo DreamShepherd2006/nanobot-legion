@@ -256,6 +256,30 @@ if [ -d "$_CRED_DIR" ]; then
     done
 fi
 
+# ── 10.6 Export DeepSeek API key for Vibe-Trading MCP ─────────────────
+# VT Swarm (Investment Committee) needs OPENAI_API_KEY for its internal LLM calls.
+# Read from neo's provider config since both neo and research share the same key.
+_NEO_CFG="$MOUNT_PATH/instances/neo/config.json"
+if [ -f "$_NEO_CFG" ]; then
+    _DS_KEY=$(python3 -c "
+import json, os
+cfg = json.load(open('$_NEO_CFG'))
+for name, prov in cfg.get('providers', {}).items():
+    if 'deepseek' in name.lower():
+        print(prov.get('api_key', ''))
+        break
+" 2>/dev/null)
+    if [ -n "$_DS_KEY" ]; then
+        export OPENAI_API_KEY="$_DS_KEY"
+        export OPENAI_API_BASE="https://api.deepseek.com/v1"
+        echo "🔑 [MCP] DeepSeek key exported for vibe-trading (from neo config)"
+    else
+        echo "⚠️  [MCP] DeepSeek key not found in neo config — vibe-trading MCP may fail"
+    fi
+else
+    echo "⚠️  [MCP] neo config.json not found — vibe-trading MCP may fail"
+fi
+
 # ── 11. Agent 启动 ─────────────────────────────────────────────────
 launch_agent() {
     local name=$1
