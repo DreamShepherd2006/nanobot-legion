@@ -256,8 +256,9 @@ if [ -d "$_CRED_DIR" ]; then
     done
 fi
 
-# ── 10.6 Export DeepSeek API key for Vibe-Trading MCP ─────────────────
-# VT Swarm (Investment Committee) needs OPENAI_API_KEY for its internal LLM calls.
+# ── 10.6 Export DeepSeek LLM for Vibe-Trading MCP ─────────────────
+# VT uses its native DeepSeek provider: LANGCHAIN_PROVIDER=deepseek
+# plus DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL (see agent/.env.example).
 # Read from neo's provider config since both neo and research share the same key.
 _NEO_CFG="$MOUNT_PATH/instances/neo/config.json"
 if [ -f "$_NEO_CFG" ]; then
@@ -281,9 +282,11 @@ else:
     print(f'DIAG:NO_KEY provider_entries={[(k, list(v.keys())) for k,v in providers.items()]}')
 " 2>&1)
     if [ -n "$_DS_KEY" ] && echo "$_DS_KEY" | grep -q '^sk-'; then
-        export OPENAI_API_KEY="$_DS_KEY"
-        export OPENAI_API_BASE="https://api.deepseek.com/v1"
-        echo "🔑 [MCP] DeepSeek key exported for vibe-trading (from neo config)"
+        export LANGCHAIN_PROVIDER=deepseek
+        export LANGCHAIN_MODEL_NAME=deepseek-v4-pro
+        export DEEPSEEK_API_KEY="$_DS_KEY"
+        export DEEPSEEK_BASE_URL="https://api.deepseek.com/v1"
+        echo "🔑 [MCP] DeepSeek LLM configured for vibe-trading (from neo config)"
     else
         echo "⚠️  [MCP] DeepSeek key not found in neo config — vibe-trading MCP may fail"
         [ -n "$_DS_KEY" ] && echo "   📋 $_DS_KEY"
