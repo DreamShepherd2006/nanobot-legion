@@ -292,6 +292,27 @@ def sync_configs():
 
 # ═══ 4. MCP 配置注入 ══════════════════════════════════════════
 
+def _resolve_mcp_env(cfg: dict, spec) -> dict:
+    """Build the env dict for an MCP server spec.
+
+    Merges spec.env (static) with keys resolved from the agent's
+    own provider config via spec.env_provider_keys.
+    """
+    env: dict[str, str] = {}
+    if spec.env:
+        env.update(spec.env)
+    if spec.env_provider_keys:
+        providers = cfg.get("providers", {})
+        for env_var, provider_name in spec.env_provider_keys.items():
+            provider_cfg = providers.get(provider_name, {})
+            key = provider_cfg.get("apiKey", provider_cfg.get("api_key", ""))
+            if key:
+                env[env_var] = key
+            else:
+                _log(f"     ⚠️  {spec.name}: provider '{provider_name}' apiKey not found, {env_var} unset")
+    return env
+
+
 def inject_mcp_from_specs(cfg_path: str) -> bool:
     """Inject MCP server configs from nanobot_quant MCP specs."""
     try:
@@ -318,16 +339,32 @@ def inject_mcp_from_specs(cfg_path: str) -> bool:
     _existing = _tools.setdefault("mcp_servers", {})
 
     for _name, _spec in _specs.items():
+        _resolved_env = _resolve_mcp_env(cfg, _spec)
+
         if _name not in _existing:
-            _existing[_name] = {
+            _entry: dict = {
                 "type": "stdio",
                 "command": _spec.command,
                 "args": _spec.args,
             }
+            if _resolved_env:
+                _entry["env"] = _resolved_env
+            _existing[_name] = _entry
             _changed = True
             _log(f"     🔌 MCP + {_name}")
         else:
-            _log(f"     🔌 MCP   {_name} (existing, skipped)")
+            # Update env on existing entry
+            _entry = _existing[_name]
+            _old_env = _entry.get("env", {})
+            if _old_env != _resolved_env:
+                if _resolved_env:
+                    _entry["env"] = _resolved_env
+                elif "env" in _entry:
+                    del _entry["env"]
+                _changed = True
+                _log(f"     🔌 MCP ~ {_name} (env updated)")
+            else:
+                _log(f"     🔌 MCP   {_name} (existing, unchanged)")
 
     if _changed:
         with open(cfg_path, "w") as f:
