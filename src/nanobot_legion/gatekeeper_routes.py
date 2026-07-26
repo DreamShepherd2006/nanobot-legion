@@ -204,6 +204,14 @@ def create_app() -> FastAPI:
     except ImportError:
         pass
 
+    # ── Trading mode routes (nanobot-quant plugin) ───────────────
+    try:
+        from nanobot_quant.mode_handlers import register_mode_routes
+        register_mode_routes(_app, gk)
+        gk._log("⚙️ 已注册交易模式管理路由")
+    except ImportError:
+        pass
+
     # ── File manager routes (commander-only) ───────────────────
     async def _fm_list_page(request: Request):
         _u = request.session.get("user")

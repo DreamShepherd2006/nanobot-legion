@@ -44,8 +44,27 @@ def ensure_business_management_chat(gatekeeper) -> None:
         for _name, _spec in _specs.items()
     )
 
+    # ── Read trading mode ────────────────────────────────────
+    _mode_path = f"{_platform.data_root}/legion/mode.json"
+    try:
+        with open(_mode_path) as f:
+            _mode_data = _json.load(f)
+        _mode = _mode_data.get("mode", "quant")
+    except Exception:
+        _mode = "quant"
+    _mode_labels = {"quant": "📊 Quant 模式（TD Sequential）", "research": "🧠 Research 模式（VT Swarm）"}
+    _mode_label = _mode_labels.get(_mode, _mode)
+
     # ── Build business management content ─────────────────────
     _content = f"""\
+# ⚙️ 交易模式
+
+当前：**{_mode_label}**
+
+→ [切换模式](/config/mode)
+
+---
+
 # 🔑 API 凭证管理
 
 配置交易所、数据源的 API 凭证，保存后即时生效。
