@@ -1,30 +1,55 @@
-"""MCP server: delegate_to_agent tool for squad internal communication.
+"""MCP server: delegate_to_agent + mode enforcement for squad trading.
 
 Usage (MCP stdio server):
     python3 -m nanobot_legion.tools.squad_delegate
 
 Tools:
-    delegate_to_agent(target_agent, message, timeout_seconds) -> str
+    get_trading_mode() -> str
+    delegate_to_agent(target_agent, message, timeout_seconds, enforce_mode) -> str
 
-The server connects directly to the target agent's WebSocket, sends a message,
-and waits for the full response (turn_end). No relay token needed — same container,
-direct WS connection.
+Risk isolation: when enforce_mode=True, the tool reads WebUI trading mode
+from mode.json and REJECTS any target that doesn't match. Neo's suggestion
+is treated as advisory only — the code is the gatekeeper.
 """
 
 from __future__ import annotations
 
 import json
-import sys
+import os
 import time
 import uuid
 
+import websocket
 from mcp.server.fastmcp import FastMCP
+
 from nanobot_legion.squad_config_loader import load_config
 
-import os
-import websocket
-
 mcp = FastMCP("squad-delegate")
+
+# ── mode enforcement ──────────────────────────────────────
+
+# Maps trading mode → squad agent name
+MODE_TO_AGENT = {
+    "quant": "quant",
+    "research": "vt_research",
+}
+
+
+def _mode_path() -> str:
+    """Resolve mode.json path from squad_config.json data_root."""
+    cfg = load_config()
+    data_root = cfg.get("data_root", "/data")
+    return os.path.join(data_root, "legion", "mode.json")
+
+
+def _read_mode() -> str:
+    """Read current trading mode, default 'quant'."""
+    try:
+        with open(_mode_path()) as f:
+            return json.load(f).get("mode", "quant")
+    except Exception:
+        return "quant"
+
 
 # ── config resolution ─────────────────────────────────────
 
@@ -38,32 +63,11 @@ def _resolve_target(target_alias: str) -> tuple:
     return info.get("id"), info.get("ws_port")
 
 
-# ── tools ─────────────────────────────────────────────────
+# ── ws delivery (shared) ──────────────────────────────────
 
-@mcp.tool()
-async def delegate_to_agent(
-    target_agent: str,
-    message: str,
-    timeout_seconds: int = 120,
-) -> str:
-    """Send a message to another squad agent and wait for its response.
-
-    Parameters:
-        target_agent: Agent name as listed in squad roster (e.g. "vt_research", "quant").
-        message: The message to send to the target agent.
-        timeout_seconds: Maximum wait for response (default 120s).
-                         Set higher for long-running tasks like swarm debates (1800+).
-
-    Returns:
-        The target agent's full response text, or an error message.
-    """
-    target_id, ws_port = _resolve_target(target_agent)
-    if not target_id or not ws_port:
-        return json.dumps({
-            "status": "error",
-            "error": f"agent '{target_agent}' not found in squad roster"
-        })
-
+def _deliver_via_ws(target_agent: str, target_id: str, ws_port: int,
+                    message: str, timeout_seconds: int) -> str:
+    """Connect to agent WS, send message, collect response until turn_end."""
     uri = f"ws://127.0.0.1:{ws_port}/"
     token = os.environ.get("NANOBOT_TOKEN", "").strip()
     if token:
@@ -71,7 +75,6 @@ async def delegate_to_agent(
 
     corr_id = uuid.uuid4().hex[:8]
 
-    # Connect
     try:
         ws = websocket.create_connection(uri, timeout=10)
     except Exception as e:
@@ -84,7 +87,6 @@ async def delegate_to_agent(
     start = time.time()
 
     try:
-        # Handshake
         greeting_raw = ws.recv()
         greeting = json.loads(greeting_raw)
         if greeting.get("event") != "ready":
@@ -94,7 +96,6 @@ async def delegate_to_agent(
                 "error": f"expected 'ready', got {greeting.get('event')}"
             })
 
-        # Send message
         payload = json.dumps({
             "type": "message",
             "chat_id": target_id,
@@ -103,7 +104,6 @@ async def delegate_to_agent(
         }, ensure_ascii=False)
         ws.send(payload)
 
-        # Read response
         while time.time() - start < timeout_seconds:
             try:
                 ws.settimeout(10)
@@ -139,7 +139,6 @@ async def delegate_to_agent(
                     "partial": "\n".join(responses) if responses else None
                 })
 
-        # Timeout — return partial
         ws.close()
         return json.dumps({
             "status": "timeout",
@@ -157,6 +156,71 @@ async def delegate_to_agent(
             "error": f"{type(e).__name__}: {e}",
             "partial": "\n".join(responses) if responses else None
         })
+
+
+# ── tools ─────────────────────────────────────────────────
+
+@mcp.tool()
+async def get_trading_mode() -> str:
+    """Read the current trading mode from WebUI settings.
+
+    Returns JSON with the current mode and the expected agent.
+    Use this before any trading-related delegation to know which agent to target.
+    """
+    mode = _read_mode()
+    agent = MODE_TO_AGENT.get(mode, "quant")
+    return json.dumps({
+        "mode": mode,
+        "expected_agent": agent,
+    })
+
+
+@mcp.tool()
+async def delegate_to_agent(
+    target_agent: str,
+    message: str,
+    timeout_seconds: int = 120,
+    enforce_mode: bool = False,
+) -> str:
+    """Send a message to another squad agent and wait for its response.
+
+    Parameters:
+        target_agent: Agent name (e.g. "vt_research", "quant").
+        message: The message to send.
+        timeout_seconds: Max wait (default 120s). Use 1800+ for swarm debates.
+        enforce_mode: When True, read WebUI mode.json and REJECT if
+                      target_agent doesn't match. The LLM's suggestion is
+                      overruled by the WebUI setting — this is the risk gate.
+
+    Returns:
+        JSON with status, response, and enforcement details.
+    """
+    # ── mode enforcement gate ──
+    if enforce_mode:
+        current_mode = _read_mode()
+        expected = MODE_TO_AGENT.get(current_mode, "quant")
+        if target_agent.lower() != expected.lower():
+            return json.dumps({
+                "status": "rejected",
+                "error": (
+                    f"Mode mismatch: WebUI is set to {current_mode.upper()} mode "
+                    f"(expected agent: {expected}), "
+                    f"but you specified '{target_agent}'. "
+                    f"Please correct your target or contact the administrator."
+                ),
+                "current_mode": current_mode,
+                "expected_agent": expected,
+                "requested_agent": target_agent,
+            })
+
+    target_id, ws_port = _resolve_target(target_agent)
+    if not target_id or not ws_port:
+        return json.dumps({
+            "status": "error",
+            "error": f"agent '{target_agent}' not found in squad roster"
+        })
+
+    return _deliver_via_ws(target_agent, target_id, ws_port, message, timeout_seconds)
 
 
 # ── entry ─────────────────────────────────────────────────
