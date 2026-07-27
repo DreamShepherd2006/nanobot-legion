@@ -342,6 +342,15 @@ def inject_mcp_from_specs(cfg_path: str, inst_name: str = "") -> bool:
         _changed = True
     _existing = _tools.setdefault("mcp_servers", {})
 
+    # Remove managed MCP servers whose target_agents no longer include this agent
+    for _name in list(_existing):
+        if _name in _specs:
+            _spec = _specs[_name]
+            if _spec.target_agents and inst_name not in _spec.target_agents:
+                del _existing[_name]
+                _changed = True
+                _log(f"     🔌 MCP - {_name} (removed, not in target_agents)")
+
     for _name, _spec in _specs.items():
         # Only inject if this agent is explicitly listed in target_agents.
         # Unset target_agents → skip (safe default: no injection).
