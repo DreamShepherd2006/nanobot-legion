@@ -278,7 +278,7 @@ def sync_configs():
             os.replace(tmp_path, cfg_path)
 
             # Inject MCP configs from installed packages (e.g., nanobot-quant OnchainOS)
-            inject_mcp_from_specs(cfg_path)
+            inject_mcp_from_specs(cfg_path, inst_name)
 
             _log(f"   ✅ {inst_name}: config 已同步 {port_mark}")
         except Exception as e:
@@ -313,8 +313,12 @@ def _resolve_mcp_env(cfg: dict, spec) -> dict:
     return env
 
 
-def inject_mcp_from_specs(cfg_path: str) -> bool:
-    """Inject MCP server configs from nanobot_quant MCP specs."""
+def inject_mcp_from_specs(cfg_path: str, inst_name: str = "") -> bool:
+    """Inject MCP server configs from nanobot_quant MCP specs.
+
+    Filters by MCPSpec.target_agents: specs without target_agents are
+    never injected; only specs that explicitly list inst_name are.
+    """
     try:
         from nanobot_quant.mcp_spec import discover as _discover_mcp
     except ImportError:
@@ -339,6 +343,11 @@ def inject_mcp_from_specs(cfg_path: str) -> bool:
     _existing = _tools.setdefault("mcp_servers", {})
 
     for _name, _spec in _specs.items():
+        # Only inject if this agent is explicitly listed in target_agents.
+        # Unset target_agents → skip (safe default: no injection).
+        if not _spec.target_agents or inst_name not in _spec.target_agents:
+            continue
+
         _resolved_env = _resolve_mcp_env(cfg, _spec)
 
         if _name not in _existing:
