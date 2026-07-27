@@ -34,7 +34,19 @@
     }
   },
   "tools": {
+    "web": {
+      "enable": true,
+      "search": {
+        "provider": "duckduckgo",
+        "maxResults": 5
+      },
+      "fetch": {
+        "useJinaReader": true
+      }
+    },
     "exec": {
+      "enable": false,
+      "restrict_to_workspace": true,
       "allowed_env_keys": [
         "NANOBOT_TOKEN",
         "NANOBOT_PEER_NEO",

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import websocket
 
-from .squad_config_sync import get_roster
+from .squad_config_loader import load_config
 
 # ── Constants ──────────────────────────────────────────────
 TOTAL_TIMEOUT   = 120       # 总超时 (s)
@@ -96,10 +96,13 @@ def _attempt_delivery(
     success=True  → output_text is the response.
     success=False → error_reason is the failure classification.
     """
-    roster, _ = get_roster()
-    target_data = roster.get(target_alias.lower())
+    cfg = load_config()
+    peers = cfg.get("peers", {})
+    target_data = peers.get(target_alias) or peers.get(target_alias.lower())
     if not target_data:
         return False, None, f"roster_miss:{target_alias}"
+    if target_data.get("zone") == "archived":
+        return False, None, f"archived:{target_alias}"
 
     target_chat_id = target_data["id"]
     target_port = target_data["ws_port"]
