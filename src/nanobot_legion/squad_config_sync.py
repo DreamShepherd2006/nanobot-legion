@@ -296,7 +296,8 @@ def _resolve_mcp_env(cfg: dict, spec) -> dict:
     """Build the env dict for an MCP server spec.
 
     Merges spec.env (static) with keys resolved from the agent's
-    own provider config via spec.env_provider_keys.
+    own provider config via spec.env_provider_keys, and model from
+    agents.defaults via spec.env_provider_model_keys.
     """
     env: dict[str, str] = {}
     if spec.env:
@@ -310,6 +311,14 @@ def _resolve_mcp_env(cfg: dict, spec) -> dict:
                 env[env_var] = key
             else:
                 _log(f"     ⚠️  {spec.name}: provider '{provider_name}' apiKey not found, {env_var} unset")
+    if getattr(spec, 'env_provider_model_keys', None):
+        defaults = cfg.get("agents", {}).get("defaults", {})
+        model = defaults.get("model", "")
+        for env_var, _provider_name in spec.env_provider_model_keys.items():
+            if model:
+                env[env_var] = model
+            else:
+                _log(f"     ⚠️  {spec.name}: model not found in agents.defaults, {env_var} unset")
     return env
 
 
