@@ -360,6 +360,13 @@ def inject_mcp_from_specs(cfg_path: str, inst_name: str = "") -> bool:
                 _changed = True
                 _log(f"     🔌 MCP - {_name} (removed, not in target_agents)")
 
+    # Remove managed MCP servers whose spec no longer exists in the registry
+    for _name in list(_existing):
+        if _name not in _specs:
+            del _existing[_name]
+            _changed = True
+            _log(f"     🔌 MCP - {_name} (removed, spec no longer registered)")
+
     for _name, _spec in _specs.items():
         # Only inject if this agent is explicitly listed in target_agents.
         # Unset target_agents → skip (safe default: no injection).
@@ -380,16 +387,30 @@ def inject_mcp_from_specs(cfg_path: str, inst_name: str = "") -> bool:
             _changed = True
             _log(f"     🔌 MCP + {_name}")
         else:
-            # Update env on existing entry
+            # Entry exists — check for changes in command, args, or env
             _entry = _existing[_name]
+            _old_command = _entry.get("command")
+            _old_args = _entry.get("args", [])
             _old_env = _entry.get("env", {})
+
+            _needs_update = False
+
+            if _old_command != _spec.command or _old_args != _spec.args:
+                _entry["command"] = _spec.command
+                _entry["args"] = _spec.args
+                _needs_update = True
+                _log(f"     🔌 MCP ~ {_name} (command/args updated)")
+
             if _old_env != _resolved_env:
                 if _resolved_env:
                     _entry["env"] = _resolved_env
                 elif "env" in _entry:
                     del _entry["env"]
-                _changed = True
+                _needs_update = True
                 _log(f"     🔌 MCP ~ {_name} (env updated)")
+
+            if _needs_update:
+                _changed = True
             else:
                 _log(f"     🔌 MCP   {_name} (existing, unchanged)")
 
