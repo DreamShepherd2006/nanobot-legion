@@ -55,6 +55,16 @@ def ensure_business_management_chat(gatekeeper) -> None:
     _mode_labels = {"quant": "📊 Quant 模式（TD Sequential）", "research": "🧠 Research 模式（VT Swarm）"}
     _mode_label = _mode_labels.get(_mode, _mode)
 
+    # ── Read live trading toggle ──────────────────────────────
+    _live_path = f"{_platform.data_root}/credentials/live.json"
+    try:
+        with open(_live_path) as f:
+            _live_data = _json.load(f)
+        _live = bool(_live_data.get("live", False))
+    except Exception:
+        _live = False
+    _live_label = "🟢 实盘交易已开启" if _live else "⚪ 纸面交易（实盘关闭）"
+
     # ── Build business management content ─────────────────────
     _content = f"""\
 # ⚙️ 交易模式
@@ -62,6 +72,14 @@ def ensure_business_management_chat(gatekeeper) -> None:
 当前：**{_mode_label}**
 
 → [切换模式](/config/mode)
+
+---
+
+# ⚡ 实盘交易开关
+
+当前：**{_live_label}**
+
+→ [配置实盘开关](/config/live)
 
 ---
 
