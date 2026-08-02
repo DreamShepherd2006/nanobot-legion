@@ -212,6 +212,14 @@ def create_app() -> FastAPI:
     except ImportError:
         pass
 
+    # ── Live trading toggle routes (nanobot-quant plugin) ───────
+    try:
+        from nanobot_quant.live_handlers import register_live_routes
+        register_live_routes(_app, gk)
+        gk._log("⚡ 已注册实盘交易开关路由")
+    except ImportError:
+        pass
+
     # ── File manager routes (commander-only) ───────────────────
     async def _fm_list_page(request: Request):
         _u = request.session.get("user")
