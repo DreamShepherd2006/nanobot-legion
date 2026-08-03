@@ -220,6 +220,14 @@ def create_app() -> FastAPI:
     except ImportError:
         pass
 
+    # ── Wallet management routes (nanobot-quant plugin) ─────────
+    try:
+        from nanobot_quant.wallet_handlers import register_wallet_routes
+        register_wallet_routes(_app, gk)
+        gk._log("👛 已注册钱包管理路由")
+    except ImportError:
+        pass
+
     # ── File manager routes (commander-only) ───────────────────
     async def _fm_list_page(request: Request):
         _u = request.session.get("user")

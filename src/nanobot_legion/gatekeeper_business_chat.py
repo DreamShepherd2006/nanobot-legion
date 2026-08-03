@@ -91,6 +91,14 @@ def ensure_business_management_chat(gatekeeper) -> None:
 
 ---
 
+# 👛 钱包管理
+
+查看 OKX Agentic Wallet 登录状态、地址、余额与交易历史，支持登录授权、创建子钱包、切换账户。
+
+→ [打开钱包管理](/config/wallet)
+
+---
+
 > 💡 **提示**：凭证文件存储在 `{_platform.data_root}/credentials/` 目录下，容器重启后保留。
 """
 
