@@ -228,6 +228,14 @@ def create_app() -> FastAPI:
     except ImportError:
         pass
 
+    # ── Token address management routes (nanobot-quant plugin) ──
+    try:
+        from nanobot_quant.token_handlers import register_token_routes
+        register_token_routes(_app, gk)
+        gk._log("🪙 已注册代币管理路由")
+    except ImportError:
+        pass
+
     # ── File manager routes (commander-only) ───────────────────
     async def _fm_list_page(request: Request):
         _u = request.session.get("user")

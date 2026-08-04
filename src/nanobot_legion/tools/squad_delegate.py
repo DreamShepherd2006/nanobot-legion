@@ -375,13 +375,16 @@ async def run_research_swarm(
         })
 
     message = (
-        f"Start a swarm analysis for {pair}. "
-        f"Use run_swarm with preset=investment_committee, start_only=true, "
-        f"and these variables:\n"
-        f"{json.dumps(variables, ensure_ascii=False)}\n\n"
-        f"IMPORTANT: After starting the swarm, report ONLY the run_id "
-        f"(format: 'run_id: swarm-xxxxx'). Do NOT poll for status. "
-        f"Do NOT wait for the swarm to finish."
+        f"Run the full research-to-execution chain for {pair}.\n"
+        f"Use the signal-structurizer tool **run_research_chain** with "
+        f"symbol=\"{pair}\" and max_iterations={max_iterations}.\n"
+        f"Do NOT use run_swarm, do NOT call structurize_signal / "
+        f"run_td_sequential / execute_signal manually.\n"
+        f"run_research_chain starts the investment_committee swarm and, "
+        f"once the debate completes, automatically chains structurize -> "
+        f"TD check -> execute.\n"
+        f"IMPORTANT: Report ONLY the run_id (format: 'run_id: swarm-xxxxx'). "
+        f"Do NOT poll for status. Do NOT wait for the swarm to finish."
     )
     result_raw = _deliver_via_ws(target_agent, target_id, ws_port, message, timeout_seconds)
 

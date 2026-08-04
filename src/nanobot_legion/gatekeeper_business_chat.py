@@ -99,6 +99,14 @@ def ensure_business_management_chat(gatekeeper) -> None:
 
 ---
 
+# 🪙 代币地址管理
+
+管理自定义代币地址（tokens.json）。录入不等于信任——地址有疑问（链不匹配/格式错误）的条目在执行前会被拦截，需确认后才放行；改地址后确认自动重置。
+
+→ [打开代币管理](/config/tokens)
+
+---
+
 > 💡 **提示**：凭证文件存储在 `{_platform.data_root}/credentials/` 目录下，容器重启后保留。
 """
 
