@@ -107,6 +107,14 @@ def ensure_business_management_chat(gatekeeper) -> None:
 
 ---
 
+# 📐 TD 策略参数
+
+TD Sequential 核心参数（DeMark 算法 + 自研评分权重 + 策略规则）。修改即保存到 td_params.json 并即时生效；默认值 = 旧版硬编码行为，未改动时零变化。权重合计必须 = 1.0。
+
+→ [打开 TD 参数管理](/config/td-params)
+
+---
+
 > 💡 **提示**：凭证文件存储在 `{_platform.data_root}/credentials/` 目录下，容器重启后保留。
 """
 

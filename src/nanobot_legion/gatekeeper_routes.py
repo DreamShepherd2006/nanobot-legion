@@ -236,6 +236,14 @@ def create_app() -> FastAPI:
     except ImportError:
         pass
 
+    # ── TD strategy parameter routes (nanobot-quant plugin) ─────
+    try:
+        from nanobot_quant.td_params_handlers import register_td_params_routes
+        register_td_params_routes(_app, gk)
+        gk._log("📐 已注册 TD 参数路由")
+    except ImportError:
+        pass
+
     # ── File manager routes (commander-only) ───────────────────
     async def _fm_list_page(request: Request):
         _u = request.session.get("user")
