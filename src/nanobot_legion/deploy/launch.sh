@@ -256,44 +256,15 @@ if [ -d "$_CRED_DIR" ]; then
     done
 fi
 
-# ── 10.6 Export DeepSeek LLM for Vibe-Trading MCP ─────────────────
-# VT uses its native DeepSeek provider: LANGCHAIN_PROVIDER=deepseek
-# plus DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL (see agent/.env.example).
-# Read from neo's provider config since both neo and research share the same key.
-_NEO_CFG="$MOUNT_PATH/instances/neo/config.json"
-if [ -f "$_NEO_CFG" ]; then
-    _DS_KEY=$(python3 -c "
-import json
-try:
-    cfg = json.load(open('$_NEO_CFG'))
-except Exception as e:
-    print(f'DIAG:JSON_ERR:{e}')
-    raise SystemExit(0)
-providers = cfg.get('providers', {})
-if not providers:
-    print(f'DIAG:NO_PROVIDERS top_keys={list(cfg.keys())}')
-    raise SystemExit(0)
-for name, prov in providers.items():
-    key = prov.get('apiKey') or prov.get('api_key') or prov.get('key', '')
-    if key:
-        print(key)
-        break
-else:
-    print(f'DIAG:NO_KEY provider_entries={[(k, list(v.keys())) for k,v in providers.items()]}')
-" 2>&1)
-    if [ -n "$_DS_KEY" ] && echo "$_DS_KEY" | grep -q '^sk-'; then
-        export LANGCHAIN_PROVIDER=deepseek
-        export LANGCHAIN_MODEL_NAME=deepseek-v4-pro
-        export DEEPSEEK_API_KEY="$_DS_KEY"
-        export DEEPSEEK_BASE_URL="https://api.deepseek.com/v1"
-        echo "🔑 [MCP] DeepSeek LLM configured for vibe-trading (from neo config)"
-    else
-        echo "⚠️  [MCP] DeepSeek key not found in neo config — vibe-trading MCP may fail"
-        [ -n "$_DS_KEY" ] && echo "   📋 $_DS_KEY"
-    fi
-else
-    echo "⚠️  [MCP] neo config.json not found at $_NEO_CFG — vibe-trading MCP may fail"
-fi
+# ── 10.6 Vibe-Trading MCP env is config-driven ────────────────────
+# VT MCP server env (LANGCHAIN_PROVIDER / LANGCHAIN_MODEL_NAME /
+# DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL) is injected by squad_config_sync
+# from nanobot-quant's mcp_spec.py (env_provider_keys / env_provider_model_keys
+# resolve from the target agent's providers + agents.defaults.model).
+# Do NOT export these here: mcp SDK spawns the MCP child process with a
+# whitelist env (get_default_environment) + config.json mcp_servers.env,
+# so process-level exports never reach the MCP server and only mislead
+# diagnostics (e.g. agent reading its own os.environ sees a stale value).
 
 # ── 11. Agent 启动 ─────────────────────────────────────────────────
 launch_agent() {
