@@ -121,6 +121,38 @@ def _build_allowed_env_keys():
 
 # ═══ 3. 导出：entrypoint.sh 调用 — 写 agent config.json ═══════
 
+def _normalise_channel_entry(entry):
+    """Normalise a channel config entry to a dict.
+
+    Some agent configs use a scalar shorthand (``"qq": true`` or ``1``)
+    instead of ``{"enabled": ...}``; sync code calls ``.get("enabled")``
+    on the entry, which crashes on a bare scalar ("'bool' object has no
+    attribute 'get'").
+    """
+    if isinstance(entry, (bool, int)):
+        return {"enabled": bool(entry)}
+    return entry
+
+
+def _channel_names() -> set[str]:
+    """Known social-channel names (websocket excluded — never disabled).
+
+    Prefers nanobot's channel registry; falls back to a hardcoded set when
+    nanobot is unavailable. Used to avoid treating channels-level behaviour
+    switches (sendProgress/showReasoning/extractDocumentText/…) as channels.
+    """
+    try:
+        from nanobot.channels.registry import discover_channel_names
+
+        return set(discover_channel_names())
+    except Exception:
+        return {
+            "dingtalk", "discord", "email", "feishu", "matrix", "mochat",
+            "msteams", "napcat", "qq", "signal", "slack", "telegram",
+            "wecom", "weixin", "whatsapp",
+        }
+
+
 def sync_configs():
     """
     从 NANOBOT_PEER_* 创建/同步各 agent 的 config.json。
@@ -248,14 +280,23 @@ def sync_configs():
                     webui_agent = "neo"
                 if inst_name != webui_agent:
                     for ch in list(cfg.get("channels", {})):
-                        if ch != "websocket":
-                            account_file = os.path.join(INSTANCES_ROOT, inst_name, "channels", ch, "account.json")
-                            enabled_before = cfg["channels"][ch].get("enabled")
-                            if not os.path.exists(account_file):
-                                cfg["channels"][ch]["enabled"] = False
-                                print(f"🔍 [sync] {inst_name}/{ch}: no account.json → enabled: {enabled_before}→False", flush=True)
-                            else:
-                                print(f"🔍 [sync] {inst_name}/{ch}: account.json ✓ → enabled: {enabled_before} (unchanged)", flush=True)
+                        if ch == "websocket" or ch not in _channel_names():
+                            # websocket is never disabled; non-channel keys
+                            # (sendProgress/showReasoning/…) are behaviour
+                            # switches and must not be treated as channels.
+                            continue
+                        # scalar shorthand → dict so .get("enabled") works.
+                        cfg["channels"][ch] = _normalise_channel_entry(cfg["channels"][ch])
+                        entry = cfg["channels"][ch]
+                        if not isinstance(entry, dict):
+                            continue  # defensive: only dicts carry enabled
+                        account_file = os.path.join(INSTANCES_ROOT, inst_name, "channels", ch, "account.json")
+                        enabled_before = entry.get("enabled")
+                        if not os.path.exists(account_file):
+                            entry["enabled"] = False
+                            print(f"🔍 [sync] {inst_name}/{ch}: no account.json → enabled: {enabled_before}→False", flush=True)
+                        else:
+                            print(f"🔍 [sync] {inst_name}/{ch}: account.json ✓ → enabled: {enabled_before} (unchanged)", flush=True)
                 port_mark = f"→ gw={squad[inst_name]['gateway_port']} ws={squad[inst_name]['ws_port']}"
             else:
                 port_mark = "(not in roster)"
