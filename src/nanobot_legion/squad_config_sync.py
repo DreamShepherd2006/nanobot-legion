@@ -121,6 +121,19 @@ def _build_allowed_env_keys():
 
 # ═══ 3. 导出：entrypoint.sh 调用 — 写 agent config.json ═══════
 
+def _normalise_channel_entry(entry):
+    """Normalise a channel config entry to a dict.
+
+    Some agent configs use the bool shorthand (``"qq": true``) instead of
+    ``{"enabled": true}``; sync code calls ``.get("enabled")`` on the
+    entry, which crashes on a bare bool ("'bool' object has no attribute
+    'get'").
+    """
+    if isinstance(entry, bool):
+        return {"enabled": entry}
+    return entry
+
+
 def sync_configs():
     """
     从 NANOBOT_PEER_* 创建/同步各 agent 的 config.json。
@@ -249,10 +262,13 @@ def sync_configs():
                 if inst_name != webui_agent:
                     for ch in list(cfg.get("channels", {})):
                         if ch != "websocket":
+                            # bool shorthand → dict so .get("enabled") works.
+                            cfg["channels"][ch] = _normalise_channel_entry(cfg["channels"][ch])
+                            entry = cfg["channels"][ch]
                             account_file = os.path.join(INSTANCES_ROOT, inst_name, "channels", ch, "account.json")
-                            enabled_before = cfg["channels"][ch].get("enabled")
+                            enabled_before = entry.get("enabled")
                             if not os.path.exists(account_file):
-                                cfg["channels"][ch]["enabled"] = False
+                                entry["enabled"] = False
                                 print(f"🔍 [sync] {inst_name}/{ch}: no account.json → enabled: {enabled_before}→False", flush=True)
                             else:
                                 print(f"🔍 [sync] {inst_name}/{ch}: account.json ✓ → enabled: {enabled_before} (unchanged)", flush=True)
