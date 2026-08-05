@@ -30,12 +30,16 @@ def test_sync_handles_bool_channel_shorthand(tmp_path, monkeypatch):
     (inst_root / "_template").mkdir(parents=True)
 
     # 模拟 quant config.json：websocket dict + qq/weixin bool 简写
+    # + channels 级行为开关（sendProgress 等，非通道，sync 不得触碰）
     cfg = {
         "gateway": {"port": 18792},
         "channels": {
             "websocket": {"port": 18793, "enabled": True},
             "qq": True,
             "weixin": False,
+            "sendProgress": True,
+            "showReasoning": 1,
+            "extractDocumentText": {"enabled": True},
         },
     }
     (inst_root / "quant" / "config.json").write_text(json.dumps(cfg))
@@ -61,3 +65,7 @@ def test_sync_handles_bool_channel_shorthand(tmp_path, monkeypatch):
     assert out["channels"]["qq"] == {"enabled": False}
     assert out["channels"]["weixin"] == {"enabled": False}
     assert out["channels"]["websocket"]["port"] == 18793
+    # 行为开关/非通道键保持原样（不得被 sync 改写或禁用）
+    assert out["channels"]["sendProgress"] is True
+    assert out["channels"]["showReasoning"] == 1
+    assert out["channels"]["extractDocumentText"] == {"enabled": True}
