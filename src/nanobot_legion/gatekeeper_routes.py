@@ -244,6 +244,14 @@ def create_app() -> FastAPI:
     except ImportError:
         pass
 
+    # ── Strategy selection routes (nanobot-quant plugin) ────────
+    try:
+        from nanobot_quant.strategies_handlers import register_strategy_routes
+        register_strategy_routes(_app, gk)
+        gk._log("📈 已注册策略选择路由")
+    except ImportError:
+        pass
+
     # ── File manager routes (commander-only) ───────────────────
     async def _fm_list_page(request: Request):
         _u = request.session.get("user")

@@ -115,6 +115,14 @@ TD Sequential 核心参数（DeMark 算法 + 自研评分权重 + 策略规则�
 
 ---
 
+# 📈 策略选择
+
+选择 Quant 路线使用的确定性信号策略（当前为 TD Sequential 两种口径变体，未来接入更多策略）。路线（mode.json）管流程形态，策略（strategy.json）管用哪个策略；切换即时生效，无需重启。
+
+→ [打开策略选择](/config/strategy)
+
+---
+
 > 💡 **提示**：凭证文件存储在 `{_platform.data_root}/credentials/` 目录下，容器重启后保留。
 """
 
