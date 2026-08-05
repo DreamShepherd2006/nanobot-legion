@@ -123,6 +123,14 @@ TD Sequential 核心参数（DeMark 算法 + 自研评分权重 + 策略规则�
 
 ---
 
+# 📊 TD 序列分析
+
+实时查看当前策略的 setup/countdown/TDST/score 轨迹（随 K 线呈现 1-9 进度），以及历史区间内所有 9 信号的后续表现统计——辅助判断趋势变化，不构成买卖交易。
+
+→ [打开 TD 序列分析](/config/td-table)
+
+---
+
 > 💡 **提示**：凭证文件存储在 `{_platform.data_root}/credentials/` 目录下，容器重启后保留。
 """
 
