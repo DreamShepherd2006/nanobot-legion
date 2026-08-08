@@ -252,6 +252,14 @@ def create_app() -> FastAPI:
     except ImportError:
         pass
 
+    # ── Execution parameter routes (nanobot-quant plugin) ────────
+    try:
+        from nanobot_quant.exec_params_handlers import register_exec_params_routes
+        register_exec_params_routes(_app, gk)
+        gk._log("🛡️ 已注册执行参数路由")
+    except ImportError:
+        pass
+
     # ── TD sequence table routes (nanobot-quant plugin) ────────
     try:
         from nanobot_quant.td_table_handlers import register_td_table_routes
