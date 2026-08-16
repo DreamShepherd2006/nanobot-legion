@@ -63,7 +63,7 @@ def ensure_business_management_chat(gatekeeper) -> None:
         _live = bool(_live_data.get("live", False))
     except Exception:
         _live = False
-    _live_label = "🟢 实盘交易已开启" if _live else "⚪ 纸面交易（实盘关闭）"
+    _live_label = "🟢 实盘交易已开启" if _live else "⚪ 实盘关闭（dry-run，不成交）"
 
     # ── Build business management content ─────────────────────
     _content = f"""\
