@@ -45,12 +45,11 @@ def _installed_rev(pkg_name: str) -> str:
     """
     try:
         dist = importlib.metadata.distribution(pkg_name)
-        for f in (dist.files or []):
-            if str(f).endswith("direct_url.json"):
-                p = Path(dist.locate_file(f))
-                data = json.loads(p.read_text())
-                rev = data.get("requested_revision", "?")
-                return str(rev)[:7] if rev else "?"
+        dj = Path(dist._path) / "direct_url.json"
+        if dj.exists():
+            data = json.loads(dj.read_text())
+            rev = data.get("requested_revision", "?")
+            return str(rev)[:7] if rev else "?"
     except Exception:
         pass
     return "?"
