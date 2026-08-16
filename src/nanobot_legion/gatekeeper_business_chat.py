@@ -205,3 +205,6 @@ TD Sequential 核心参数（DeMark 算法 + 自研评分权重 + 策略规则�
         _platform.write_sidebar_state(_agent_name, _sidebar_state)
 
     gatekeeper._log(f"📊 业务管理 chat 已创建 (session={_cid})")
+    for _line in _content.splitlines():
+        if "钱包管理" in _line and ("打开" in _line or "/config/" in _line):
+            gatekeeper._log(f"[DIAG] business chat wallet entry: {_line.strip()}")

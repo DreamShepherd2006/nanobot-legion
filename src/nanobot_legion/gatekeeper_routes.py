@@ -4,10 +4,12 @@ Extracted from gatekeeper.py Batch 3b.
 """
 
 import glob as _glob_module
+import importlib.metadata
 import json
 import os
 import signal as _signal
 
+from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 from starlette.middleware.sessions import SessionMiddleware
@@ -34,6 +36,26 @@ from .squad_admin import create_squad_admin_routes
 _DENIED_MSG = "<h3 style='text-align:center;margin-top:60px;color:#e74c3c;'>🔒 仅 Commander 或已映射用户可访问</h3>"
 
 
+def _installed_rev(pkg_name: str) -> str:
+    """Return the pip-installed revision for a distribution (direct_url.json).
+
+    Reads ``requested_revision`` (short hash or tag) so startup logs show
+    exactly which commit is running — helps distinguish CD fork validation
+    pins from upstream references.
+    """
+    try:
+        dist = importlib.metadata.distribution(pkg_name)
+        for f in (dist.files or []):
+            if str(f).endswith("direct_url.json"):
+                p = Path(dist.locate_file(f))
+                data = json.loads(p.read_text())
+                rev = data.get("requested_revision", "?")
+                return str(rev)[:7] if rev else "?"
+    except Exception:
+        pass
+    return "?"
+
+
 def create_app() -> FastAPI:
     """Create and wire the FastAPI application.
 
@@ -42,6 +64,9 @@ def create_app() -> FastAPI:
     """
     gk = Gatekeeper()
     gk.setup()
+
+    for _pkg in ("nanobot-legion", "nanobot-quant", "cloud-agent-gateway"):
+        gk._log(f"[DIAG] installed {_pkg} @{_installed_rev(_pkg)}")
 
     # ── FastAPI app ──
     _app = FastAPI(lifespan=gk._lifespan)
