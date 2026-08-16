@@ -93,9 +93,9 @@ def ensure_business_management_chat(gatekeeper) -> None:
 
 # 👛 钱包管理
 
-查看 OKX Agentic Wallet 登录状态、地址、余额与交易历史，支持登录授权、创建子钱包、切换账户。
+DEX 钱包（OKX Agentic Wallet：登录状态、地址、余额、子钱包、转账）与 CEX 账户（Gate：slot↔子账号映射、余额、主→子划转）分两大类管理。
 
-→ [打开钱包管理](/config/wallet)
+→ [打开钱包管理](/config/wallets)
 
 ---
 

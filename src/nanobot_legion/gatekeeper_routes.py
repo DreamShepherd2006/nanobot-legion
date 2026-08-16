@@ -228,6 +228,14 @@ def create_app() -> FastAPI:
     except ImportError:
         pass
 
+    # ── Gate CEX account routes (nanobot-quant plugin) ─────────
+    try:
+        from nanobot_quant.gate_handlers import register_gate_routes
+        register_gate_routes(_app, gk)
+        gk._log("🏦 已注册 Gate CEX 账户路由")
+    except ImportError:
+        pass
+
     # ── Token address management routes (nanobot-quant plugin) ──
     try:
         from nanobot_quant.token_handlers import register_token_routes
