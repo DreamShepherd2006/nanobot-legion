@@ -300,6 +300,14 @@ def create_app() -> FastAPI:
     except ImportError:
         pass
 
+    # ── Backtest page routes (nanobot-quant plugin) ────────────
+    try:
+        from nanobot_quant.backtest_handlers import register_backtest_routes
+        register_backtest_routes(_app, gk)
+        gk._log("📈 已注册回测路由")
+    except ImportError:
+        pass
+
     # ── File manager routes (commander-only) ───────────────────
     async def _fm_list_page(request: Request):
         _u = request.session.get("user")

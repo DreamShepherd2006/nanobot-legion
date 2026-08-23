@@ -139,6 +139,14 @@ TD Sequential 核心参数（DeMark 算法 + 自研评分权重 + 策略规则�
 
 ---
 
+# 📈 回测
+
+场景回放引擎（与实盘同一策略决策代码）：Gate CEX 历史 K 线 + 模拟撮合（手续费/滑点/分批），输出 ROI/成交明细/每 slot 净值。
+
+→ [打开回测](/config/backtest)
+
+---
+
 > 💡 **提示**：凭证文件存储在 `{_platform.data_root}/credentials/` 目录下，容器重启后保留。
 """
 
