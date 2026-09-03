@@ -308,6 +308,15 @@ def create_app() -> FastAPI:
     except ImportError:
         pass
 
+    # ── OKX options chain page routes (nanobot-quant plugin) ───
+    try:
+        from nanobot_quant.okx_options_handlers import register_okx_options_routes
+        register_okx_options_routes(_app, gk)
+        gk._log("🟤 已注册 OKX 期权链路由")
+    except Exception as e:  # noqa: BLE001 — 插件缺失/异常不阻塞 gatekeeper，但必须可见
+        import sys
+        print(f"[GATEKEEPER] ⚠️ OKX 期权链路由挂载失败: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+
     # ── File manager routes (commander-only) ───────────────────
     async def _fm_list_page(request: Request):
         _u = request.session.get("user")
