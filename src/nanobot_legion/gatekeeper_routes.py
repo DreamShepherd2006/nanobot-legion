@@ -308,6 +308,14 @@ def create_app() -> FastAPI:
     except ImportError:
         pass
 
+    # ── OKX options chain page routes (nanobot-quant plugin) ───
+    try:
+        from nanobot_quant.okx_options_handlers import register_okx_options_routes
+        register_okx_options_routes(_app, gk)
+        gk._log("🟤 已注册 OKX 期权链路由")
+    except ImportError:
+        pass
+
     # ── File manager routes (commander-only) ───────────────────
     async def _fm_list_page(request: Request):
         _u = request.session.get("user")

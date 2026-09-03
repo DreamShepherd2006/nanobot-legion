@@ -147,6 +147,14 @@ TD Sequential 核心参数（DeMark 算法 + 自研评分权重 + 策略规则�
 
 ---
 
+# 🟤 OKX 期权链
+
+只读参考：BTC/ETH 币本位期权链（Call/Put × strike × 到期）——markVol IV、delta、卖 put 辅助列（权利金/张、年化率、行权担保 USD，按 OKX 面值口径）。
+
+→ [打开期权链](/config/okx-options)
+
+---
+
 > 💡 **提示**：凭证文件存储在 `{_platform.data_root}/credentials/` 目录下，容器重启后保留。
 """
 
