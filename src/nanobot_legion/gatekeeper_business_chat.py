@@ -65,81 +65,57 @@ def ensure_business_management_chat(gatekeeper) -> None:
         _live = False
     _live_label = "🟢 实盘交易已开启" if _live else "⚪ 实盘关闭（dry-run，不成交）"
 
+    # ── Read options inspector status (optional module) ─────
+    _opt_path = f"{_platform.data_root}/credentials/okx_options_params.json"
+    _opt_on: bool | None = None
+    try:
+        with open(_opt_path) as f:
+            _opt = _json.load(f).get("live") or {}
+        _opt_on = bool(_opt.get("enabled", False))
+    except Exception:
+        _opt_on = None  # 期权模块未装/无配置 → 状态区不显示期权巡检项
+
+    _status_lines = [
+        f"| 交易模式 | {_mode_label} | [切换](/config/mode) |",
+        f"| 实盘开关 | {_live_label} | [配置](/config/live) |",
+    ]
+    if _opt_on is not None:
+        _opt_label = "🟤 期权巡检 开启" if _opt_on else "🟤 期权巡检 未开启"
+        _status_lines.append(f"| 期权巡检 | {_opt_label} | [期权页](/config/okx-options) |")
+
     # ── Build business management content ─────────────────────
     _content = f"""\
-# ⚙️ 交易模式
+# ⚙️ 当前状态
 
-当前：**{_mode_label}**
+| 项 | 状态 | 入口 |
+|---|---|---|
+{chr(10).join(_status_lines)}
 
-→ [切换模式](/config/mode)
-
----
-
-# ⚡ 实盘交易开关
-
-当前：**{_live_label}**
-
-→ [配置实盘开关](/config/live)
+> 各分类入口见下方分组；状态开关即时生效，无需重启空间。
 
 ---
 
-# 🔑 API 凭证管理
+# ⚙️ 交易控制
 
-配置交易所、数据源的 API 凭证，保存后即时生效。
-
-{_cred_rows}
-
----
-
-# 👛 钱包管理
-
-DEX 钱包（OKX Agentic Wallet：登录状态、地址、余额、子钱包、转账）与 CEX 账户（Gate：slot↔子账号映射、余额、主→子划转）分两大类管理。
-
-→ [打开钱包管理](/config/wallets)
+| 项 | 说明 | 入口 |
+|---|---|---|
+| 交易模式 | Quant（TD 确定性）/ Research（VT Swarm 辩论）二选一 | [切换](/config/mode) |
+| 实盘开关 | WebUI 唯一授权（dry-run 不成交 / live 上链） | [配置](/config/live) |
+| 执行参数 | 风控上限 / 执行通道 / 标的池 / 场景 / TD 启停 | [打开](/config/exec) |
 
 ---
 
-# 🪙 代币地址管理
+# 📐 策略与信号
 
-管理自定义代币地址（tokens.json）。录入不等于信任——地址有疑问（链不匹配/格式错误）的条目在执行前会被拦截，需确认后才放行；改地址后确认自动重置。
-
-→ [打开代币管理](/config/tokens)
-
----
-
-# 📐 TD 策略参数
-
-TD Sequential 核心参数（DeMark 算法 + 自研评分权重 + 策略规则）。修改即保存到 td_params.json 并即时生效；默认值 = 旧版硬编码行为，未改动时零变化。权重合计必须 = 1.0。
-
-→ [打开 TD 参数管理](/config/td-params)
+| 项 | 说明 | 入口 |
+|---|---|---|
+| 策略选择 | 选择 Quant 路线的信号策略（TD 变体等） | [打开](/config/strategy) |
+| TD 策略参数 | TD 算法核心参数（权重 / setup / countdown） | [打开](/config/td-params) |
+| TD 序列分析 | setup/countdown/TDST/score 轨迹 + 历史信号统计 | [打开](/config/td-table) |
 
 ---
 
-# 📈 策略选择
-
-选择 Quant 路线使用的确定性信号策略（当前为 TD Sequential 两种口径变体，未来接入更多策略）。路线（mode.json）管流程形态，策略（strategy.json）管用哪个策略；切换即时生效，无需重启。
-
-→ [打开策略选择](/config/strategy)
-
----
-
-# 🛡️ 执行参数
-
-链上执行环节的系统级策略（单仓上限/回撤/止损/滑点/SOL 缓冲）。WebUI 锁死，MCP/LLM 不可改；修改即时生效，默认值 = 旧版硬编码行为。
-
-→ [打开执行参数](/config/exec)
-
----
-
-# 📊 TD 序列分析
-
-实时查看当前策略的 setup/countdown/TDST/score 轨迹（随 K 线呈现 1-9 进度），以及历史区间内所有 9 信号的后续表现统计——辅助判断趋势变化，不构成买卖交易。
-
-→ [打开 TD 序列分析](/config/td-table)
-
----
-
-# 📈 回测
+# 📊 回测验证
 
 场景回放引擎（与实盘同一策略决策代码）：Gate CEX 历史 K 线 + 模拟撮合（手续费/滑点/分批），输出 ROI/成交明细/每 slot 净值。
 
@@ -147,15 +123,26 @@ TD Sequential 核心参数（DeMark 算法 + 自研评分权重 + 策略规则�
 
 ---
 
-# 🟤 OKX 期权链
+# 🔑 账户与资产
 
-只读参考：BTC/ETH 币本位期权链（Call/Put × strike × 到期）——markVol IV、delta、卖 put 辅助列（权利金/张、年化率、行权担保 USD，按 OKX 面值口径）。
+{_cred_rows}
+
+| 项 | 说明 | 入口 |
+|---|---|---|
+| 钱包管理 | DEX（Agentic Wallet 子钱包）与 CEX（Gate 子账号）分两大类 | [打开](/config/wallets) |
+| 代币地址 | tokens.json 登记（确认门控，执行前校验） | [打开](/config/tokens) |
+
+---
+
+# 🟤 OKX 期权
+
+U 本位线性期权（USDSⓈ-M，美元现金结算）：期权链 + IV/HV + 卖 put 定价辅助；持仓/台账监控；逐仓担保自动追加；到期巡检自动判定（OTM 作废关账 / ITM 赔付补买）。
 
 → [打开期权链](/config/okx-options)
 
 ---
 
-> 💡 **提示**：凭证文件存储在 `{_platform.data_root}/credentials/` 目录下，容器重启后保留。
+> 💡 **提示**：凭证文件存储在 {_platform.data_root}/credentials/ 目录下，容器重启后保留。
 """
 
     _cid = str(_uuid.uuid4())
