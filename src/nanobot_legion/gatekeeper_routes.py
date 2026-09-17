@@ -317,6 +317,17 @@ def create_app() -> FastAPI:
         import sys
         print(f"[GATEKEEPER] ⚠️ OKX 期权链路由挂载失败: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
+    # ── Options backtest routes (nanobot-quant plugin) ─────────
+    try:
+        from nanobot_quant.options_backtest_handlers import (
+            register_options_backtest_routes,
+        )
+        register_options_backtest_routes(_app, gk)
+        gk._log("🟤 已注册期权回测路由（/config/backtest 期权分栏）")
+    except Exception as e:  # noqa: BLE001 — 插件缺失/异常不阻塞 gatekeeper，但必须可见
+        import sys
+        print(f"[GATEKEEPER] ⚠️ 期权回测路由挂载失败: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+
     # ── File manager routes (commander-only) ───────────────────
     async def _fm_list_page(request: Request):
         _u = request.session.get("user")
