@@ -328,6 +328,15 @@ def create_app() -> FastAPI:
         import sys
         print(f"[GATEKEEPER] ⚠️ 期权回测路由挂载失败: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
+    # ── F1 analysis routes (nanobot-quant plugin, §33.36) ──────
+    try:
+        from nanobot_quant.f1_backtest_handlers import register_f1_routes
+        register_f1_routes(_app, gk)
+        gk._log("🧪 已注册 F1 分析路由（/config/backtest/f1）")
+    except Exception as e:  # noqa: BLE001 — 插件缺失/异常不阻塞 gatekeeper，但必须可见
+        import sys
+        print(f"[GATEKEEPER] ⚠️ F1 分析路由挂载失败: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+
     # ── File manager routes (commander-only) ───────────────────
     async def _fm_list_page(request: Request):
         _u = request.session.get("user")
