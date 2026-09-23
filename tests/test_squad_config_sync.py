@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import types
 
 from nanobot_legion.squad_config_sync import _normalise_channel_entry
 
@@ -69,3 +71,80 @@ def test_sync_handles_bool_channel_shorthand(tmp_path, monkeypatch):
     assert out["channels"]["sendProgress"] is True
     assert out["channels"]["showReasoning"] == 1
     assert out["channels"]["extractDocumentText"] == {"enabled": True}
+
+
+# ── MCP tool_timeout 注入（2026-09-23）─────────────────────────
+
+def _fake_spec(**kw):
+    """minimal MCPSpec duck-type（legion 侧只用属性，不 import quant）。"""
+    defaults = dict(name="signal-structurizer", display="Signal Structurizer",
+                    command="python3", args=["-m", "x"],
+                    target_agents=["quant"], tool_timeout=60,
+                    # _resolve_mcp_env 会读这几个字段（ducks-type 要完整）
+                    env=None, env_provider_keys=None,
+                    env_provider_model_keys=None, env_from_credential=None)
+    defaults.update(kw)
+    return types.SimpleNamespace(**defaults)
+
+
+def _install_fake_discover(monkeypatch, specs: dict):
+    """把 nanobot_quant.mcp_spec.discover 换成假注册表（测试环境未装 quant）。"""
+    pkg = types.ModuleType("nanobot_quant")
+    pkg.__path__ = []
+    mod = types.ModuleType("nanobot_quant.mcp_spec")
+    mod.discover = lambda: specs
+    monkeypatch.setitem(sys.modules, "nanobot_quant", pkg)
+    monkeypatch.setitem(sys.modules, "nanobot_quant.mcp_spec", mod)
+
+
+def test_inject_mcp_writes_tool_timeout(tmp_path, monkeypatch):
+    """新建 entry 要带上 tool_timeout（否则吃上游默认 30s、长任务工具被掐断）。"""
+    import nanobot_legion.squad_config_sync as s
+
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps({"agents": {"defaults": {}}}))
+    _install_fake_discover(monkeypatch, {"signal-structurizer": _fake_spec()})
+
+    assert s.inject_mcp_from_specs(str(cfg_path), "quant") is True
+    entry = json.loads(cfg_path.read_text())["tools"]["mcp_servers"]["signal-structurizer"]
+    assert entry["tool_timeout"] == 60
+    assert entry["type"] == "stdio" and entry["command"] == "python3"
+
+
+def test_inject_mcp_updates_existing_tool_timeout(tmp_path, monkeypatch):
+    """存量 entry（已是默认 30）→ 同步为 spec 值，且返回 True（需重生效）。"""
+    import nanobot_legion.squad_config_sync as s
+
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps({
+        "agents": {"defaults": {}},
+        "tools": {"mcp_servers": {"signal-structurizer": {
+            "type": "stdio", "command": "python3", "args": ["-m", "x"],
+            "tool_timeout": 30,
+        }}},
+    }))
+    _install_fake_discover(monkeypatch, {"signal-structurizer": _fake_spec()})
+
+    assert s.inject_mcp_from_specs(str(cfg_path), "quant") is True
+    entry = json.loads(cfg_path.read_text())["tools"]["mcp_servers"]["signal-structurizer"]
+    assert entry["tool_timeout"] == 60
+
+
+def test_inject_mcp_without_tool_timeout_is_noop(tmp_path, monkeypatch):
+    """旧版 spec（无该属性）→ 不写字段、不报错、不算变更（向后兼容）。"""
+    import nanobot_legion.squad_config_sync as s
+
+    spec = _fake_spec()
+    del spec.tool_timeout
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps({
+        "agents": {"defaults": {}},
+        "tools": {"mcp_servers": {"signal-structurizer": {
+            "type": "stdio", "command": "python3", "args": ["-m", "x"],
+        }}},
+    }))
+    _install_fake_discover(monkeypatch, {"signal-structurizer": spec})
+
+    assert s.inject_mcp_from_specs(str(cfg_path), "quant") is False
+    entry = json.loads(cfg_path.read_text())["tools"]["mcp_servers"]["signal-structurizer"]
+    assert "tool_timeout" not in entry
