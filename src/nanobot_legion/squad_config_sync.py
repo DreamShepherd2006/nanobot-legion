@@ -415,6 +415,9 @@ def inject_mcp_from_specs(cfg_path: str, inst_name: str = "") -> bool:
             continue
 
         _resolved_env = _resolve_mcp_env(cfg, _spec)
+        # 工具调用超时（nanobot 侧 MCPServerConfig.tool_timeout，上游默认 30s）。
+        # 用 getattr 兼容旧版 quant 的 MCPSpec（无该字段时保持上游默认）。
+        _tool_timeout = getattr(_spec, "tool_timeout", None)
 
         if _name not in _existing:
             _entry: dict = {
@@ -424,9 +427,12 @@ def inject_mcp_from_specs(cfg_path: str, inst_name: str = "") -> bool:
             }
             if _resolved_env:
                 _entry["env"] = _resolved_env
+            if _tool_timeout is not None:
+                _entry["tool_timeout"] = _tool_timeout
             _existing[_name] = _entry
             _changed = True
-            _log(f"     🔌 MCP + {_name}")
+            _log(f"     🔌 MCP + {_name}" + (
+                f" (tool_timeout={_tool_timeout}s)" if _tool_timeout else ""))
         else:
             # Entry exists — check for changes in command, args, or env
             _entry = _existing[_name]
@@ -449,6 +455,15 @@ def inject_mcp_from_specs(cfg_path: str, inst_name: str = "") -> bool:
                     del _entry["env"]
                 _needs_update = True
                 _log(f"     🔌 MCP ~ {_name} (env updated)")
+
+            # tool_timeout 变化同样要落盘（调高/调低、或从有到无）
+            if _entry.get("tool_timeout") != _tool_timeout:
+                if _tool_timeout is not None:
+                    _entry["tool_timeout"] = _tool_timeout
+                elif "tool_timeout" in _entry:
+                    del _entry["tool_timeout"]
+                _needs_update = True
+                _log(f"     🔌 MCP ~ {_name} (tool_timeout updated)")
 
             if _needs_update:
                 _changed = True
