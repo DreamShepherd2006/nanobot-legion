@@ -220,12 +220,12 @@ def test_register_modules_empty_when_none(monkeypatch):
     assert any("未发现 Legion Module" in m for m in out)
 
 
-def test_legacy_routes_kept_as_fallback():
-    """步 2 必须保留旧白名单兜底（步 4 才删）。"""
+def test_legacy_whitelist_removed():
+    """步 4：gatekeeper 不得再直连具体应用的 handler（零硬编码耦合）。"""
     import importlib.util
 
     spec = importlib.util.find_spec("nanobot_legion.gatekeeper_routes")
     src = open(spec.origin, encoding="utf-8").read()
-    assert "def _register_legacy_quant_routes(" in src
-    assert "if not _modules:" in src
-    assert src.count("from nanobot_quant.") == 14, "旧白名单应保持 14 个页面（便于步 4 逐项核对）"
+    assert "_register_legacy_quant_routes" not in src
+    assert "from nanobot_quant" not in src
+    assert "register_modules(" in src

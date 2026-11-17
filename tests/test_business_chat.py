@@ -138,7 +138,6 @@ def test_module_content_used_when_modules_found(monkeypatch, tmp_path):
     gk = FakeGK(tmp_path)
     mod = _loaded(sections=[FakeSection("⚙️ 当前状态", [FakeRow("交易模式", status="📊 Quant 模式", link="/config/mode")])])
     monkeypatch.setattr(gb, "discover_modules", lambda log=None: [mod])
-    monkeypatch.setattr(gb, "_build_legacy_content", lambda gk: pytest.fail("不该走兜底"))
 
     gb.ensure_business_management_chat(gk)
 
@@ -165,43 +164,39 @@ def test_multiple_modules_get_display_wrappers(monkeypatch, tmp_path):
     assert "## 🅰️ A 系统" in content and "## 🅱️ B 系统" in content
 
 
-def test_module_render_failure_falls_back_to_legacy(monkeypatch, tmp_path):
+def test_module_render_failure_skips_chat(monkeypatch, tmp_path):
     gk = FakeGK(tmp_path)
     mod = _loaded(sections=RuntimeError("boom"))
     monkeypatch.setattr(gb, "discover_modules", lambda log=None: [mod])
-    monkeypatch.setattr(gb, "_build_legacy_content", lambda gk: "LEGACY-CONTENT")
     gb.ensure_business_management_chat(gk)
-    content = next(iter(gk._platform.sessions.values()))[1]["content"]
-    assert content.strip() == "LEGACY-CONTENT"
+    assert gk._platform.sessions == {}          # 步 4 起没有兜底内容
+    assert any("渲染失败" in m for m in gk.logs)
 
 
-def test_module_without_sections_falls_back(monkeypatch, tmp_path):
+def test_module_without_sections_skips_chat(monkeypatch, tmp_path):
     gk = FakeGK(tmp_path)
     monkeypatch.setattr(gb, "discover_modules", lambda log=None: [_loaded(sections=[])])
-    monkeypatch.setattr(gb, "_build_legacy_content", lambda gk: "LEGACY-CONTENT")
     gb.ensure_business_management_chat(gk)
-    content = next(iter(gk._platform.sessions.values()))[1]["content"]
-    assert content.strip() == "LEGACY-CONTENT"
+    assert gk._platform.sessions == {}
     assert any("未声明会话内容" in m for m in gk.logs)
 
 
-# ── 兜底路径 ──────────────────────────────────────────────────────
+# ── 无模块 / 发现异常 ─────────────────────────────────────────────
 
 
-def test_no_modules_uses_legacy(monkeypatch, tmp_path):
+def test_no_modules_skips_chat(monkeypatch, tmp_path):
     gk = FakeGK(tmp_path)
     monkeypatch.setattr(gb, "discover_modules", lambda log=None: [])
-    monkeypatch.setattr(gb, "_build_legacy_content", lambda gk: "LEGACY-CONTENT")
-    gb.ensure_business_management_chat(gk)
-    assert len(gk._platform.sessions) == 2
-
-
-def test_nothing_written_when_no_content(monkeypatch, tmp_path):
-    gk = FakeGK(tmp_path)
-    monkeypatch.setattr(gb, "discover_modules", lambda log=None: [])
-    monkeypatch.setattr(gb, "_build_legacy_content", lambda gk: None)
     gb.ensure_business_management_chat(gk)
     assert gk._platform.sessions == {}
+    assert any("未发现 Legion Module" in m for m in gk.logs)
+
+
+def test_legacy_content_builder_is_gone():
+    """步 4：直连应用的兜底实现必须已删除（不留两套实现）。"""
+    assert not hasattr(gb, "_build_legacy_content")
+    src = open(gb.__file__, encoding="utf-8").read()
+    assert "nanobot_quant" not in src
 
 
 def test_discovery_exception_does_not_break(monkeypatch, tmp_path):
@@ -211,9 +206,9 @@ def test_discovery_exception_does_not_break(monkeypatch, tmp_path):
         raise RuntimeError("discover failed")
 
     monkeypatch.setattr(gb, "discover_modules", boom)
-    monkeypatch.setattr(gb, "_build_legacy_content", lambda gk: "LEGACY-CONTENT")
     gb.ensure_business_management_chat(gk)
-    assert len(gk._platform.sessions) == 2
+    assert gk._platform.sessions == {}
+    assert any("模块发现异常" in m for m in gk.logs)
 
 
 # ── 会话写入行为 ──────────────────────────────────────────────────
