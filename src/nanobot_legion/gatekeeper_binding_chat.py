@@ -10,6 +10,8 @@ import uuid as _uuid
 
 from cloud_agent_gateway.package_source import get_package_source, build_source_link
 
+from .pkg_info import module_source_rows
+
 # ── Constants — keep in sync with cloud-agent-gateway oauth_proxy.py ──
 _BINDING_CHAT_TITLE = "配置中心"
 _LEGACY_BINDING_TITLES = ["社交通道配置提示", "社交通道配置指南"]
@@ -45,6 +47,15 @@ def ensure_pinned_binding_chat(gatekeeper):
     cag_link = build_source_link(cag_info, "DreamShepherd2006/cloud-agent-gateway")
     nanobot_link = build_source_link(nanobot_info, "DreamShepherd2006/nanobot", "nightly")
     nanobot_legion_link = build_source_link(nanobot_legion_info, "DreamShepherd2006/nanobot-legion")
+
+    # 核心组件固定三行；已安装的 Legion Module 自动追加（装什么显示什么，
+    # 不再把组件清单写死在模板里）
+    _source_rows = "\n".join([
+        f" | cloud-agent-gateway（框架层） | {cag_link} |",
+        f" | nanobot-legion（部署层） | {nanobot_legion_link} |",
+        f" | nanobot（AI 引擎） | {nanobot_link} |",
+        *[f" | {_label} | {_link} |" for _label, _link in module_source_rows()],
+    ])
 
     # Two content variants: commander gets full admin, workers get channels only.
     _content_commander = f"""\
@@ -110,9 +121,7 @@ Legion 多智能体编制管理。Commander (neo) 由初始化配置生成。
 
  | 组件 | 源码 |
  |------|------|
- | cloud-agent-gateway（框架层） | {cag_link} |
- | nanobot-legion（部署层） | {nanobot_legion_link} |
- | nanobot（AI 引擎） | {nanobot_link} |
+{_source_rows}
 
  🧭 点击上方链接浏览完整代码，仓库中的 Dockerfile 可用于部署新空间。
 """

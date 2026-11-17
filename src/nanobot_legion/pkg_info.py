@@ -15,8 +15,9 @@ import importlib.metadata
 import sys
 
 try:  # CAG >= v0.2.0；更老的安装缺这个模块，此时退回读包版本
-    from cloud_agent_gateway.package_source import get_package_source
+    from cloud_agent_gateway.package_source import build_source_link, get_package_source
 except Exception:  # noqa: BLE001 - 旧版 CAG 缺模块，不应阻断启动
+    build_source_link = None
     get_package_source = None
 
 
@@ -64,3 +65,62 @@ def installed_rev(pkg_name: str) -> str:
         return "?"
 
     return _version_of(pkg_name)
+
+
+# 模块行的展示后缀（C147 定稿文案：nanobot-quant →「nanobot-quant业务系统」）
+MODULE_LABEL_SUFFIX = "业务系统"
+
+
+def module_source_rows() -> list[tuple[str, str]]:
+    """枚举已安装的 Legion Module，返回「📦 开源代码」表里的 (组件名, 源码列)。
+
+    发现机制与 ``module_loader`` 同源（同一个 entry point group），不另维护
+    组件清单：装了什么模块就显示什么行。git 安装走 ``build_source_link``
+    （与核心组件同款、带 pin）；PyPI 安装没有 ``direct_url.json``，退化为版本号
+    文本；任一步失败只跳过该行并打原因，不影响配置中心整体生成。
+    """
+    if get_package_source is None or build_source_link is None:
+        diag("跳过模块源码行：cloud-agent-gateway 未提供 package_source/build_source_link")
+        return []
+
+    try:
+        from .module_loader import _iter_entry_points
+
+        eps = _iter_entry_points()
+    except Exception as exc:  # noqa: BLE001 - 发现失败不能影响启动
+        diag(f"枚举 Legion Module 失败 — {type(exc).__name__}: {exc}")
+        return []
+
+    rows: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for ep in eps:
+        ep_name = str(getattr(ep, "name", "?") or "?")
+        dist = getattr(ep, "dist", None)
+        if dist is None:
+            diag(f"模块 {ep_name}: entry point 缺少发行包信息，跳过")
+            continue
+        try:
+            pkg_name = str(dist.metadata["Name"] or "").strip()
+            version = str(getattr(dist, "version", "") or "")
+        except Exception as exc:  # noqa: BLE001
+            diag(f"模块 {ep_name}: 读取发行包元数据失败 — {type(exc).__name__}: {exc}")
+            continue
+        if not pkg_name or pkg_name.lower() in seen:
+            continue
+        seen.add(pkg_name.lower())
+
+        try:
+            info = get_package_source(pkg_name)
+        except Exception as exc:  # noqa: BLE001
+            diag(f"{pkg_name}: 读取安装来源失败 — {type(exc).__name__}: {exc}")
+            info = None
+
+        if info:
+            link = build_source_link(info, f"DreamShepherd2006/{pkg_name}")
+        elif version:
+            link = f"v{version}（PyPI 安装，无源码链接）"
+        else:
+            link = "—"
+        rows.append((f"{pkg_name}{MODULE_LABEL_SUFFIX}", link))
+
+    return rows
