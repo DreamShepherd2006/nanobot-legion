@@ -4,12 +4,10 @@ Extracted from gatekeeper.py Batch 3b.
 """
 
 import glob as _glob_module
-import importlib.metadata
 import json
 import os
 import signal as _signal
 
-from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 from starlette.middleware.sessions import SessionMiddleware
@@ -31,28 +29,19 @@ from .gatekeeper_handlers import (
     handle_tasks_post,
 )
 from .gatekeeper_ws_proxy import handle_ws_proxy
+from .pkg_info import installed_rev
 from .squad_admin import create_squad_admin_routes
 
 _DENIED_MSG = "<h3 style='text-align:center;margin-top:60px;color:#e74c3c;'>🔒 仅 Commander 或已映射用户可访问</h3>"
 
 
 def _installed_rev(pkg_name: str) -> str:
-    """Return the pip-installed revision for a distribution (direct_url.json).
+    """Return the pip-installed revision for a distribution.
 
-    Reads ``requested_revision`` (short hash or tag) so startup logs show
-    exactly which commit is running — helps distinguish CD fork validation
-    pins from upstream references.
+    实现（含 direct_url.json 解析与失败原因输出）见 :mod:`nanobot_legion.pkg_info`，
+    与「📦 开源代码」表共用 ``cloud_agent_gateway.package_source``。
     """
-    try:
-        dist = importlib.metadata.distribution(pkg_name)
-        dj = Path(dist._path) / "direct_url.json"
-        if dj.exists():
-            data = json.loads(dj.read_text())
-            rev = data.get("requested_revision", "?")
-            return str(rev)[:7] if rev else "?"
-    except Exception:
-        pass
-    return "?"
+    return installed_rev(pkg_name)
 
 
 def create_app() -> FastAPI:
