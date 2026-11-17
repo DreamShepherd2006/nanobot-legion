@@ -220,122 +220,17 @@ def create_app() -> FastAPI:
     create_agent_routes(_app, gk)
     create_squad_admin_routes(_app, gk)
 
-    # ── Business credential routes (nanobot-quant plugin) ───────
-    try:
-        from nanobot_quant.credential_handlers import register_credential_routes
-        register_credential_routes(_app, gk)
-        gk._log("📊 已注册 API 凭证管理路由")
-    except ImportError:
-        pass
+    # ── Legion Modules（插件自注册；未发现模块时回退旧白名单）────
+    from nanobot_legion.module_registry import register_modules
 
-    # ── Trading mode routes (nanobot-quant plugin) ───────────────
     try:
-        from nanobot_quant.mode_handlers import register_mode_routes
-        register_mode_routes(_app, gk)
-        gk._log("⚙️ 已注册交易模式管理路由")
-    except ImportError:
-        pass
-
-    # ── Live trading toggle routes (nanobot-quant plugin) ───────
-    try:
-        from nanobot_quant.live_handlers import register_live_routes
-        register_live_routes(_app, gk)
-        gk._log("⚡ 已注册实盘交易开关路由")
-    except ImportError:
-        pass
-
-    # ── Wallet management routes (nanobot-quant plugin) ─────────
-    try:
-        from nanobot_quant.wallet_handlers import register_wallet_routes
-        register_wallet_routes(_app, gk)
-        gk._log("👛 已注册钱包管理路由")
-    except ImportError:
-        pass
-
-    # ── Gate CEX account routes (nanobot-quant plugin) ─────────
-    try:
-        from nanobot_quant.gate_handlers import register_gate_routes
-        register_gate_routes(_app, gk)
-        gk._log("🏦 已注册 Gate CEX 账户路由")
-    except ImportError:
-        pass
-
-    # ── Token address management routes (nanobot-quant plugin) ──
-    try:
-        from nanobot_quant.token_handlers import register_token_routes
-        register_token_routes(_app, gk)
-        gk._log("🪙 已注册代币管理路由")
-    except ImportError:
-        pass
-
-    # ── TD strategy parameter routes (nanobot-quant plugin) ─────
-    try:
-        from nanobot_quant.td_params_handlers import register_td_params_routes
-        register_td_params_routes(_app, gk)
-        gk._log("📐 已注册 TD 参数路由")
-    except ImportError:
-        pass
-
-    # ── Strategy selection routes (nanobot-quant plugin) ────────
-    try:
-        from nanobot_quant.strategies_handlers import register_strategy_routes
-        register_strategy_routes(_app, gk)
-        gk._log("📈 已注册策略选择路由")
-    except ImportError:
-        pass
-
-    # ── Execution parameter routes (nanobot-quant plugin) ────────
-    try:
-        from nanobot_quant.exec_params_handlers import register_exec_params_routes
-        register_exec_params_routes(_app, gk)
-        gk._log("🛡️ 已注册执行参数路由")
-    except ImportError:
-        pass
-
-    # ── TD sequence table routes (nanobot-quant plugin) ────────
-    try:
-        from nanobot_quant.td_table_handlers import register_td_table_routes
-        register_td_table_routes(_app, gk)
-        gk._log("📊 已注册 TD 序列分析路由")
-    except ImportError:
-        pass
-
-    # ── Backtest page routes (nanobot-quant plugin) ────────────
-    try:
-        from nanobot_quant.backtest_handlers import register_backtest_routes
-        register_backtest_routes(_app, gk)
-        gk._log("📈 已注册回测路由")
-    except ImportError:
-        pass
-
-    # ── OKX options chain page routes (nanobot-quant plugin) ───
-    try:
-        from nanobot_quant.okx_options_handlers import register_okx_options_routes
-        register_okx_options_routes(_app, gk)
-        gk._log("🟤 已注册 OKX 期权链路由")
-    except Exception as e:  # noqa: BLE001 — 插件缺失/异常不阻塞 gatekeeper，但必须可见
-        import sys
-        print(f"[GATEKEEPER] ⚠️ OKX 期权链路由挂载失败: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-
-    # ── Options backtest routes (nanobot-quant plugin) ─────────
-    try:
-        from nanobot_quant.options_backtest_handlers import (
-            register_options_backtest_routes,
-        )
-        register_options_backtest_routes(_app, gk)
-        gk._log("🟤 已注册期权回测路由（/config/backtest 期权分栏）")
-    except Exception as e:  # noqa: BLE001 — 插件缺失/异常不阻塞 gatekeeper，但必须可见
-        import sys
-        print(f"[GATEKEEPER] ⚠️ 期权回测路由挂载失败: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-
-    # ── F1 analysis routes (nanobot-quant plugin, §33.36) ──────
-    try:
-        from nanobot_quant.f1_backtest_handlers import register_f1_routes
-        register_f1_routes(_app, gk)
-        gk._log("🧪 已注册 F1 分析路由（/config/backtest/f1）")
-    except Exception as e:  # noqa: BLE001 — 插件缺失/异常不阻塞 gatekeeper，但必须可见
-        import sys
-        print(f"[GATEKEEPER] ⚠️ F1 分析路由挂载失败: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        _modules = register_modules(_app, gk, log=gk._log)
+    except Exception as e:  # noqa: BLE001 — 模块层异常不阻塞网关
+        import sys as _sys
+        print(f"[GATEKEEPER] ⚠️ 模块挂载异常: {type(e).__name__}: {e}", file=_sys.stderr, flush=True)
+        _modules = []
+    if not _modules:
+        _register_legacy_quant_routes(_app, gk)
 
     # ── File manager routes (commander-only) ───────────────────
     async def _fm_list_page(request: Request):
@@ -410,3 +305,124 @@ def create_app() -> FastAPI:
     _app.websocket("/{path:path}")(handle_ws_proxy)
 
     return _app
+
+
+def _register_legacy_quant_routes(app, gk) -> None:
+    """旧硬编码白名单（步 4 删除）：未发现 Legion Module 时的兜底路径。"""
+    # ── Business credential routes (nanobot-quant plugin) ───────
+    try:
+        from nanobot_quant.credential_handlers import register_credential_routes
+        register_credential_routes(app, gk)
+        gk._log("📊 已注册 API 凭证管理路由")
+    except ImportError:
+        pass
+
+    # ── Trading mode routes (nanobot-quant plugin) ───────────────
+    try:
+        from nanobot_quant.mode_handlers import register_mode_routes
+        register_mode_routes(app, gk)
+        gk._log("⚙️ 已注册交易模式管理路由")
+    except ImportError:
+        pass
+
+    # ── Live trading toggle routes (nanobot-quant plugin) ───────
+    try:
+        from nanobot_quant.live_handlers import register_live_routes
+        register_live_routes(app, gk)
+        gk._log("⚡ 已注册实盘交易开关路由")
+    except ImportError:
+        pass
+
+    # ── Wallet management routes (nanobot-quant plugin) ─────────
+    try:
+        from nanobot_quant.wallet_handlers import register_wallet_routes
+        register_wallet_routes(app, gk)
+        gk._log("👛 已注册钱包管理路由")
+    except ImportError:
+        pass
+
+    # ── Gate CEX account routes (nanobot-quant plugin) ─────────
+    try:
+        from nanobot_quant.gate_handlers import register_gate_routes
+        register_gate_routes(app, gk)
+        gk._log("🏦 已注册 Gate CEX 账户路由")
+    except ImportError:
+        pass
+
+    # ── Token address management routes (nanobot-quant plugin) ──
+    try:
+        from nanobot_quant.token_handlers import register_token_routes
+        register_token_routes(app, gk)
+        gk._log("🪙 已注册代币管理路由")
+    except ImportError:
+        pass
+
+    # ── TD strategy parameter routes (nanobot-quant plugin) ─────
+    try:
+        from nanobot_quant.td_params_handlers import register_td_params_routes
+        register_td_params_routes(app, gk)
+        gk._log("📐 已注册 TD 参数路由")
+    except ImportError:
+        pass
+
+    # ── Strategy selection routes (nanobot-quant plugin) ────────
+    try:
+        from nanobot_quant.strategies_handlers import register_strategy_routes
+        register_strategy_routes(app, gk)
+        gk._log("📈 已注册策略选择路由")
+    except ImportError:
+        pass
+
+    # ── Execution parameter routes (nanobot-quant plugin) ────────
+    try:
+        from nanobot_quant.exec_params_handlers import register_exec_params_routes
+        register_exec_params_routes(app, gk)
+        gk._log("🛡️ 已注册执行参数路由")
+    except ImportError:
+        pass
+
+    # ── TD sequence table routes (nanobot-quant plugin) ────────
+    try:
+        from nanobot_quant.td_table_handlers import register_td_table_routes
+        register_td_table_routes(app, gk)
+        gk._log("📊 已注册 TD 序列分析路由")
+    except ImportError:
+        pass
+
+    # ── Backtest page routes (nanobot-quant plugin) ────────────
+    try:
+        from nanobot_quant.backtest_handlers import register_backtest_routes
+        register_backtest_routes(app, gk)
+        gk._log("📈 已注册回测路由")
+    except ImportError:
+        pass
+
+    # ── OKX options chain page routes (nanobot-quant plugin) ───
+    try:
+        from nanobot_quant.okx_options_handlers import register_okx_options_routes
+        register_okx_options_routes(app, gk)
+        gk._log("🟤 已注册 OKX 期权链路由")
+    except Exception as e:  # noqa: BLE001 — 插件缺失/异常不阻塞 gatekeeper，但必须可见
+        import sys
+        print(f"[GATEKEEPER] ⚠️ OKX 期权链路由挂载失败: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+
+    # ── Options backtest routes (nanobot-quant plugin) ─────────
+    try:
+        from nanobot_quant.options_backtest_handlers import (
+            register_options_backtest_routes,
+        )
+        register_options_backtest_routes(app, gk)
+        gk._log("🟤 已注册期权回测路由（/config/backtest 期权分栏）")
+    except Exception as e:  # noqa: BLE001 — 插件缺失/异常不阻塞 gatekeeper，但必须可见
+        import sys
+        print(f"[GATEKEEPER] ⚠️ 期权回测路由挂载失败: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+
+    # ── F1 analysis routes (nanobot-quant plugin, §33.36) ──────
+    try:
+        from nanobot_quant.f1_backtest_handlers import register_f1_routes
+        register_f1_routes(app, gk)
+        gk._log("🧪 已注册 F1 分析路由（/config/backtest/f1）")
+    except Exception as e:  # noqa: BLE001 — 插件缺失/异常不阻塞 gatekeeper，但必须可见
+        import sys
+        print(f"[GATEKEEPER] ⚠️ F1 分析路由挂载失败: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+
