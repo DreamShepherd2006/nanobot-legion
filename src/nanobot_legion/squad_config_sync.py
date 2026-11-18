@@ -242,6 +242,12 @@ def sync_configs():
         if os.path.basename(os.path.dirname(f)) != "_template"
     ]
 
+    # MCP spec 与实例无关：整轮 sync 只采集一次。
+    # 此前是每个实例注入时各采集一次 ⇒ 「MCP spec 来源」及采集告警被重复打印
+    # N 次（含 *.removed.* 归档目录，实测 10 行）。采集提到循环外后日志自然只
+    # 出现一次，spec 来源仍可见（降噪但不静默）。
+    _mcp_specs = _collect_mcp_specs() if cfg_files else {}
+
     for cfg_path in sorted(cfg_files):
         inst_name = os.path.basename(os.path.dirname(cfg_path))
 
@@ -319,7 +325,7 @@ def sync_configs():
             os.replace(tmp_path, cfg_path)
 
             # Inject MCP configs from installed packages (e.g., nanobot-quant OnchainOS)
-            inject_mcp_from_specs(cfg_path, inst_name)
+            inject_mcp_from_specs(cfg_path, inst_name, specs=_mcp_specs)
 
             _log(f"   ✅ {inst_name}: config 已同步 {port_mark}")
         except Exception as e:
@@ -470,16 +476,18 @@ def _collect_mcp_specs(modules=None, legacy_discover=None) -> dict:
     return specs
 
 
-def inject_mcp_from_specs(cfg_path: str, inst_name: str = "") -> bool:
+def inject_mcp_from_specs(cfg_path: str, inst_name: str = "", specs: dict | None = None) -> bool:
     """Inject MCP server configs declared by Legion Modules.
 
     Specs come from each module's optional ``mcp_specs(ctx)`` hook (aggregated
     by ``_collect_mcp_specs``); the legacy ``nanobot_quant.mcp_spec`` import is
     only used as a compatibility fallback.
+    ``specs`` 由调用方（``sync_configs``）整轮采集一次后传入，避免逐实例重复
+    采集与重复日志；传 None 时行为与旧版一致（自行采集，兼容单独调用）。
     Filters by MCPSpec.target_agents: specs without target_agents are
     never injected; only specs that explicitly list inst_name are.
     """
-    _specs = _collect_mcp_specs()
+    _specs = _collect_mcp_specs() if specs is None else specs
     if not _specs:
         return False
 
