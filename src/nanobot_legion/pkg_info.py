@@ -71,28 +71,21 @@ def installed_rev(pkg_name: str) -> str:
 MODULE_LABEL_SUFFIX = "业务系统"
 
 
-def module_source_rows() -> list[tuple[str, str]]:
-    """枚举已安装的 Legion Module，返回「📦 开源代码」表里的 (组件名, 源码列)。
+def _module_dists():
+    """枚举 Legion Module 的发行包，yield ``(ep_name, pkg_name, version, dist)``。
 
-    发现机制与 ``module_loader`` 同源（同一个 entry point group），不另维护
-    组件清单：装了什么模块就显示什么行。git 安装走 ``build_source_link``
-    （与核心组件同款、带 pin）；PyPI 安装没有 ``direct_url.json``，退化为版本号
-    文本；任一步失败只跳过该行并打原因，不影响配置中心整体生成。
+    发现机制与 ``module_loader`` 同源（同一个 entry point group），不维护第二份
+    组件清单：装了什么模块就遍历出什么。单项失败只打原因并跳过，不影响调用方
+    （启动 DIAG / 配置中心表格）继续工作。
     """
-    if get_package_source is None or build_source_link is None:
-        diag("跳过模块源码行：cloud-agent-gateway 未提供 package_source/build_source_link")
-        return []
-
     try:
         from .module_loader import _iter_entry_points
 
         eps = _iter_entry_points()
     except Exception as exc:  # noqa: BLE001 - 发现失败不能影响启动
         diag(f"枚举 Legion Module 失败 — {type(exc).__name__}: {exc}")
-        return []
+        return
 
-    rows: list[tuple[str, str]] = []
-    seen: set[str] = set()
     for ep in eps:
         ep_name = str(getattr(ep, "name", "?") or "?")
         dist = getattr(ep, "dist", None)
@@ -105,7 +98,43 @@ def module_source_rows() -> list[tuple[str, str]]:
         except Exception as exc:  # noqa: BLE001
             diag(f"模块 {ep_name}: 读取发行包元数据失败 — {type(exc).__name__}: {exc}")
             continue
-        if not pkg_name or pkg_name.lower() in seen:
+        if not pkg_name:
+            continue
+        yield ep_name, pkg_name, version, dist
+
+
+def module_packages() -> list[str]:
+    """已安装 Legion Module 的发行包名（去重保序）。
+
+    启动 DIAG 的版本行用它追加：装了模块就多报一行，没装就什么都不报——
+    不再硬编码任何业务包名（C152）。空表 = 纯框架部署，属正常状态、不告警。
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+    for _ep_name, pkg_name, _version, _dist in _module_dists():
+        if pkg_name.lower() in seen:
+            continue
+        seen.add(pkg_name.lower())
+        names.append(pkg_name)
+    return names
+
+
+def module_source_rows() -> list[tuple[str, str]]:
+    """枚举已安装的 Legion Module，返回「📦 开源代码」表里的 (组件名, 源码列)。
+
+    发现机制与 ``module_loader`` 同源（同一个 entry point group），不另维护
+    组件清单：装了什么模块就显示什么行。git 安装走 ``build_source_link``
+    （与核心组件同款、带 pin）；PyPI 安装没有 ``direct_url.json``，退化为版本号
+    文本；任一步失败只跳过该行并打原因，不影响配置中心整体生成。
+    """
+    if get_package_source is None or build_source_link is None:
+        diag("跳过模块源码行：cloud-agent-gateway 未提供 package_source/build_source_link")
+        return []
+
+    rows: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for _ep_name, pkg_name, version, _dist in _module_dists():
+        if pkg_name.lower() in seen:
             continue
         seen.add(pkg_name.lower())
 
