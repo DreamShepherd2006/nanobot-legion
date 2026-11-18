@@ -128,27 +128,9 @@ def test_discover_dedupes_same_name(monkeypatch):
     assert any("重名" in m for m in out)
 
 
-def test_discover_falls_back_to_legacy_import(monkeypatch):
-    mod = FakeModule()
-    monkeypatch.setattr(ml, "_iter_entry_points", lambda: [])
-
-    fake_pkg = types.ModuleType("nanobot_quant.legion_plugin")
-    fake_pkg.MODULE = mod
-    monkeypatch.setattr(ml.importlib, "import_module", lambda name: fake_pkg)
-
-    out, log = logs()
-    found = ml.discover_modules(log=log)
-    assert [m.name for m in found] == ["demo"]
-    assert any("兜底" in m for m in out)
-
-
 def test_discover_returns_empty_when_nothing_installed(monkeypatch):
+    """零安装 ⇒ 空列表 + 明确日志；不再按约定名隐式加载任何业务包。"""
     monkeypatch.setattr(ml, "_iter_entry_points", lambda: [])
-
-    def _boom(name):
-        raise ImportError("no module")
-
-    monkeypatch.setattr(ml.importlib, "import_module", _boom)
     out, log = logs()
     assert ml.discover_modules(log=log) == []
     assert any("未发现 Legion Module" in m for m in out)
@@ -229,3 +211,22 @@ def test_legacy_whitelist_removed():
     assert "_register_legacy_quant_routes" not in src
     assert "from nanobot_quant" not in src
     assert "register_modules(" in src
+
+
+def test_no_implicit_business_package_loading(monkeypatch):
+    """零隐式依赖：没有任何 entry point 时，发现流程不得尝试导入任何具体业务包。"""
+    import builtins
+
+    monkeypatch.setattr(ml, "_iter_entry_points", lambda: [])
+    attempted: list[str] = []
+    real_import = builtins.__import__
+
+    def guard(name, *a, **k):
+        if name == "nanobot_quant" or name.startswith("nanobot_quant."):
+            attempted.append(name)
+            raise ImportError("blocked in test")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", guard)
+    assert ml.discover_modules(log=lambda m: None) == []
+    assert attempted == [], f"不应尝试导入任何业务包，实际: {attempted}"

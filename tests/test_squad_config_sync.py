@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import json
-import sys
 import types
 
 from nanobot_legion.squad_config_sync import _normalise_channel_entry
@@ -88,13 +87,16 @@ def _fake_spec(**kw):
 
 
 def _install_fake_discover(monkeypatch, specs: dict):
-    """把 nanobot_quant.mcp_spec.discover 换成假注册表（测试环境未装 quant）。"""
-    pkg = types.ModuleType("nanobot_quant")
-    pkg.__path__ = []
-    mod = types.ModuleType("nanobot_quant.mcp_spec")
-    mod.discover = lambda: specs
-    monkeypatch.setitem(sys.modules, "nanobot_quant", pkg)
-    monkeypatch.setitem(sys.modules, "nanobot_quant.mcp_spec", mod)
+    """用一个假「已安装模块」声明 mcp_specs（测试环境不装任何业务包）。"""
+    import nanobot_legion.squad_config_sync as s
+
+    class _Demo:
+        @staticmethod
+        def mcp_specs(ctx):
+            return specs
+
+    mod = types.SimpleNamespace(name="demo", obj=_Demo())
+    monkeypatch.setattr(s, "_modules_for_sync", lambda: [mod])
 
 
 def test_inject_mcp_writes_tool_timeout(tmp_path, monkeypatch):
@@ -148,3 +150,23 @@ def test_inject_mcp_without_tool_timeout_is_noop(tmp_path, monkeypatch):
     assert s.inject_mcp_from_specs(str(cfg_path), "quant") is False
     entry = json.loads(cfg_path.read_text())["tools"]["mcp_servers"]["signal-structurizer"]
     assert "tool_timeout" not in entry
+
+
+def test_collect_specs_without_modules_never_imports_business_package(monkeypatch):
+    """零隐式依赖：无模块声明 mcp_specs 时只记「跳过注入」，不尝试任何业务包。"""
+    import builtins
+
+    import nanobot_legion.squad_config_sync as s
+
+    attempted: list[str] = []
+    real_import = builtins.__import__
+
+    def guard(name, *a, **k):
+        if name == "nanobot_quant" or name.startswith("nanobot_quant."):
+            attempted.append(name)
+            raise ImportError("blocked in test")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", guard)
+    assert s._collect_mcp_specs(modules=[]) == {}
+    assert attempted == [], f"不应尝试导入任何业务包，实际: {attempted}"

@@ -82,8 +82,8 @@ Row(label: str, desc: str = "", status: str = "", link: str = "")
 
 ## 3. 发现与加载
 
-- 首选：Python entry point group `nanobot_legion.modules`
-- 兜底：按发行包名推导约定模块（如 `nanobot_quant.legion_plugin`）
+- 唯一来源：Python entry point group `nanobot_legion.modules`
+- **无任何隐式兜底**：不按包名/约定名推导模块（曾经的 `nanobot_quant.legion_plugin` 兜底已于 2026-11-18 删除）——一个新部署只需装自己想装的业务系统，不会被旧系统牵连
 - 加载顺序：核心路由先注册，模块按 `name` 字典序
 - **失败隔离**：单个模块 import / 注册 / 渲染抛错 → 记可见日志并跳过该模块，核心与其他模块不受影响
 - **sdk 不兼容 → 拒绝加载该模块**（fail-closed）并打醒目日志，不做「尽力加载」
@@ -135,6 +135,7 @@ Row(label: str, desc: str = "", status: str = "", link: str = "")
 - Legion 升级契约时递增该值，并在本文「变更记录」中写明破坏点
 - 过渡安排：Legion 在一版内保留旧的内置白名单（插件优先、发现到即跳过白名单），下一版本删除白名单
   - **已完成（2026-11-17，步 4）**：旧白名单与业务会话兜底内容均已删除；未发现模块时网关不报错、只是没有业务页面与「业务管理」会话（stderr 提示 `未发现 Legion Module`）。
+  - **已完成（2026-11-18，零隐式依赖）**：三处旧业务系统的隐式依赖全部删除——① `module_loader` 的约定名兜底 ② `squad_config_sync` 的 `nanobot_quant.mcp_spec` 兼容回退（现无模块声明钩子即跳过注入）③ `tools/squad_delegate.py` 对 `nanobot_quant.onchainos_cli` 的可选 import（连带删掉从未随委派下发的 `variables`/`pre_fetch` 死代码）。至此 legion 源码对任何具体业务包零引用，`grep -r nanobot_quant src/` 应为空。
 
 ### 变更记录
 
@@ -142,6 +143,7 @@ Row(label: str, desc: str = "", status: str = "", link: str = "")
 |---|---|---|
 | 1 | 2026-11-17 | 首版：Module 对象、Section/Row 原子、entry point 发现、命名空间、失败隔离；同日完成路由插件化、会话 sections() 渲染与旧白名单下线 |
 | 1.1 | 2026-11-18 | 新增**可选**钩子 `mcp_specs(ctx)`：模块可声明自己的 MCP server（Legion 不再硬编码 `nanobot_quant.mcp_spec`）；可选能力不升 `sdk`，旧模块不受影响 |
+| 1.2 | 2026-11-18 | **零隐式依赖**：删除 entry point 约定名兜底、`nanobot_quant.mcp_spec` 兼容回退、`squad_delegate` 对 `nanobot_quant.onchainos_cli` 的可选 import；无模块时仅告警不报错；`run_research_swarm` 返回体不再带 `pre_fetch` 字段（此前只作回显、从未随委派下发） |
 
 ---
 
