@@ -39,8 +39,8 @@ RUN pip install --break-system-packages \
     echo "✅ CAG v0.2.0 + channel patches"
 
 # ── 4. nanobot-legion：内核补丁 + webui 源码 + 部署资产 ─────────────
-RUN echo "[bust=1]" && pip install --break-system-packages \
-        git+https://github.com/DreamShepherd2006/nanobot-legion.git@0b687794 && \
+RUN echo "[bust=3]" && pip install --break-system-packages \
+        git+https://github.com/DreamShepherd2006/nanobot-legion.git@46d25ce7 && \
     python3 -m nanobot_legion.install && \
     echo "✅ nanobot-legion @0b687794 (v0.2.1)"
 
