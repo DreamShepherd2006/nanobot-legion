@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nanobot-legion"
-version = "0.2.0"
+version = "0.2.1"
 description = "Squad multi-agent overlay for nanobot cloud deployments"
 readme = "README.md"
 license = {text = "MIT"}
