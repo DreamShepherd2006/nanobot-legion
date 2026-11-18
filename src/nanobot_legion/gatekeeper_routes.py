@@ -29,7 +29,7 @@ from .gatekeeper_handlers import (
     handle_tasks_post,
 )
 from .gatekeeper_ws_proxy import handle_ws_proxy
-from .pkg_info import installed_rev
+from .pkg_info import installed_rev, module_packages
 from .squad_admin import create_squad_admin_routes
 
 _DENIED_MSG = "<h3 style='text-align:center;margin-top:60px;color:#e74c3c;'>🔒 仅 Commander 或已映射用户可访问</h3>"
@@ -53,7 +53,9 @@ def create_app() -> FastAPI:
     gk = Gatekeeper()
     gk.setup()
 
-    for _pkg in ("nanobot-legion", "nanobot-quant", "cloud-agent-gateway"):
+    # 框架组件固定两件；业务系统（Legion Module）按 entry point 声明自动追加。
+    # 不在这里写任何业务包名——纯框架部署只有上面两行，装了模块才多一行（C152）。
+    for _pkg in ("nanobot-legion", "cloud-agent-gateway", *module_packages()):
         gk._log(f"[DIAG] installed {_pkg} @{_installed_rev(_pkg)}")
 
     # ── FastAPI app ──
