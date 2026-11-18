@@ -7,6 +7,7 @@
 - 模块发现只调用一次（sync 会按 agent 多次注入）
 """
 
+import json
 import types
 
 import pytest
@@ -21,6 +22,11 @@ class Spec:
         self.command = "python3"
         self.args = ["-m", name]
         self.target_agents = list(targets)
+        # 与真实 MCPSpec 同形的可选字段（_resolve_mcp_env 会读 env*）
+        self.env = {}
+        self.env_provider_keys = {}
+        self.env_provider_model_keys = {}
+        self.tool_timeout = None
 
 
 def _mod(name, hook=None):
@@ -121,6 +127,60 @@ def test_module_discovery_is_cached(monkeypatch, logs):
     sync._collect_mcp_specs()
 
     assert calls == [1]
+
+
+def test_inject_accepts_precollected_specs(logs, monkeypatch, tmp_path):
+    """specs 由调用方传入时不再重复采集（避免每实例重复打印来源行）。"""
+
+    def boom(*a, **k):  # pragma: no cover - 被调用即失败
+        raise AssertionError("specs 已传入时不应再采集")
+
+    monkeypatch.setattr(sync, "_collect_mcp_specs", boom)
+
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text("{}")
+    changed = sync.inject_mcp_from_specs(str(cfg_path), "neo", specs={"demo": Spec("demo")})
+
+    assert changed is True
+    assert not any("MCP spec 来源" in line for line in logs)
+    written = json.loads(cfg_path.read_text())
+    assert "demo" in written["tools"]["mcp_servers"]
+
+
+def test_sync_collects_specs_once_per_run(logs, monkeypatch, tmp_path):
+    """整轮 sync 只采集一次 spec：N 个实例共用同一批，来源日志只出现一次。"""
+    for name in ("neo", "quant", "trinity.removed.20260101"):
+        inst = tmp_path / name
+        inst.mkdir()
+        (inst / "config.json").write_text("{}")
+
+    monkeypatch.setattr(sync, "INSTANCES_ROOT", str(tmp_path))
+    monkeypatch.setattr(sync, "TEMPLATE", str(tmp_path / "_missing_template.json"))
+    monkeypatch.setattr(
+        sync,
+        "_parse_squad",
+        lambda: {
+            "neo": {"gateway_port": 18790, "ws_port": 18791},
+            "quant": {"gateway_port": 18810, "ws_port": 18811},
+        },
+    )
+
+    calls: list[int] = []
+
+    def collect(*a, **k):
+        calls.append(1)
+        logs.append("     🔌 MCP spec 来源：demo(1)")
+        return {"demo": Spec("demo", targets=("neo", "quant"))}
+
+    monkeypatch.setattr(sync, "_collect_mcp_specs", collect)
+
+    sync.sync_configs()
+
+    assert len(calls) == 1, "整轮 sync 应只采集一次 spec"
+    assert sum("MCP spec 来源" in line for line in logs) == 1
+    for name in ("neo", "quant"):
+        cfg = json.loads((tmp_path / name / "config.json").read_text())
+        assert "demo" in cfg["tools"]["mcp_servers"], f"{name} 应复用同一批 spec"
 
 
 def test_real_quant_hook_yields_three_servers():
