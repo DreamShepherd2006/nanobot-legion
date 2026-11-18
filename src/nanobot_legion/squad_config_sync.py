@@ -363,18 +363,123 @@ def _resolve_mcp_env(cfg: dict, spec) -> dict:
     return env
 
 
-def inject_mcp_from_specs(cfg_path: str, inst_name: str = "") -> bool:
-    """Inject MCP server configs from nanobot_quant MCP specs.
+# ── MCP 声明聚合（模块契约可选钩子 mcp_specs）─────────────────
+# 本函数运行在 squad_config_sync 这个独立短进程里（无 gatekeeper），
+# 故传给模块的 ctx 里 gatekeeper 为 None；钩子不得依赖它。
+_SYNC_MODULES = None
 
+
+def _modules_for_sync():
+    """发现并缓存已安装模块（sync 会按 agent 多次调注入，不能每次 import）。"""
+    global _SYNC_MODULES
+    if _SYNC_MODULES is None:
+        try:
+            from nanobot_legion.module_loader import discover_modules
+
+            _SYNC_MODULES = discover_modules(log=_log)
+        except Exception as e:  # noqa: BLE001 - 发现失败不得阻塞配置同步
+            _log(f"     ⚠️ 模块发现失败: {type(e).__name__}: {e}")
+            _SYNC_MODULES = []
+    return _SYNC_MODULES
+
+
+def _collect_mcp_specs(modules=None, legacy_discover=None) -> dict:
+    """聚合各模块声明的 MCP server。
+
+    - 可选钩子：模块未实现 ``mcp_specs(ctx)`` 即不提供 MCP 工具（不是错误）
+    - 跨模块重名 → 先到先得并告警；单模块异常只跳过该模块
+    - 兼容回退：**没有任何模块声明钩子**时才回退到旧的
+      ``nanobot_quant.mcp_spec.discover()``（下个 minor 版本移除）
+    - 全程可见：来源、跳过原因、兼容路径都会打日志，不静默
+    """
+    if modules is None:
+        modules = _modules_for_sync()
+
+    specs: dict = {}
+    owner: dict = {}
+    sources: list[str] = []
+    notes: list[str] = []
+    hook_seen = False
+
+    for mod in modules or []:
+        hook = getattr(getattr(mod, "obj", None), "mcp_specs", None)
+        if not callable(hook):
+            continue
+        hook_seen = True
+        try:
+            from nanobot_legion.module_registry import ModuleContext
+
+            ctx = ModuleContext(mod.name, DATA_ROOT, gatekeeper=None, log=_log)
+        except Exception:  # noqa: BLE001 - 上下文构造失败也不能炸 sync
+            ctx = None
+        try:
+            got = hook(ctx) or {}
+        except Exception as e:  # noqa: BLE001 - 单模块失败隔离
+            notes.append(f"⚠️ 模块 {mod.name} 的 mcp_specs 失败: {type(e).__name__}: {e}")
+            continue
+        if not isinstance(got, dict):
+            notes.append(
+                f"⚠️ 模块 {mod.name} 的 mcp_specs 返回值不是 dict"
+                f"（{type(got).__name__}），已忽略"
+            )
+            continue
+
+        added = 0
+        for name, spec in got.items():
+            if name in specs:
+                notes.append(f"⚠️ MCP {name} 重名，保留 {owner[name]} 的声明，忽略 {mod.name}")
+                continue
+            spec_name = getattr(spec, "name", name)
+            if spec_name != name:
+                notes.append(
+                    f"⚠️ 模块 {mod.name} 的 MCP 键 {name} 与 spec.name={spec_name!r} 不一致，已忽略"
+                )
+                continue
+            specs[name] = spec
+            owner[name] = mod.name
+            added += 1
+        if added:
+            sources.append(f"{mod.name}({added})")
+
+    # 兼容回退：仅当所有模块都没声明钩子（＝旧版模块集合）时才走硬 import
+    if not specs and not hook_seen:
+        if legacy_discover is None:
+            try:
+                from nanobot_quant.mcp_spec import discover as legacy_discover
+            except Exception:  # noqa: BLE001 - 未安装属正常情况
+                legacy_discover = None
+        if legacy_discover is not None:
+            try:
+                specs = dict(legacy_discover() or {})
+            except Exception as e:  # noqa: BLE001
+                notes.append(f"⚠️ 兼容回退失败: {type(e).__name__}: {e}")
+            else:
+                if specs:
+                    sources.append(f"legacy:nanobot_quant({len(specs)})")
+                    notes.append(
+                        "⚠️ 兼容路径：没有模块声明 mcp_specs()，已回退到 "
+                        "nanobot_quant.mcp_spec（请升级模块；下个 minor 版本移除）"
+                    )
+        if not specs:
+            notes.append("ℹ️ 跳过 MCP 注入：没有模块声明 mcp_specs()")
+
+    for note in notes:
+        _log(f"     {note}")
+    if sources:
+        _log(f"     🔌 MCP spec 来源：{', '.join(sources)}")
+    return specs
+
+
+def inject_mcp_from_specs(cfg_path: str, inst_name: str = "") -> bool:
+    """Inject MCP server configs declared by Legion Modules.
+
+    Specs come from each module's optional ``mcp_specs(ctx)`` hook (aggregated
+    by ``_collect_mcp_specs``); the legacy ``nanobot_quant.mcp_spec`` import is
+    only used as a compatibility fallback.
     Filters by MCPSpec.target_agents: specs without target_agents are
     never injected; only specs that explicitly list inst_name are.
     """
-    try:
-        from nanobot_quant.mcp_spec import discover as _discover_mcp
-    except ImportError:
-        return False
-
-    _specs = _discover_mcp()
+    _specs = _collect_mcp_specs()
     if not _specs:
         return False
 

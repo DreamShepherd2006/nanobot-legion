@@ -35,7 +35,25 @@ class Module:
 
     def sections(self, ctx) -> list[Section]:
         """返回置顶会话内容的结构化描述，由 Legion 渲染成统一格式。"""
+
+    # ── 可选能力（未实现 = 不提供，不算契约破坏，不升 sdk）──────────
+    def mcp_specs(self, ctx) -> dict[str, object]:
+        """返回要注入 agent config 的 MCP server 声明（键=server 名）。
+
+        - 每次启动由 squad_config_sync 聚合一次；必须幂等、无副作用
+        - ``ctx.gatekeeper`` 可能为 None（sync 是独立进程）
+        - 跨模块重名 → 先到先得并告警
+        """
 ```
+
+> **spec 形状**：Legion 按属性名读取（duck typing，不 import 模块的类型）：
+> `name`（必填，须等于字典键）、`command` / `args`（必填）、`target_agents`（必填，
+> 空列表=不注入任何 agent）；可选 `tool_timeout`、`env`、`env_provider_keys`、
+> `env_provider_model_keys`。
+>
+> **导入纪律**：模块 plugin 的**顶层**只允许 stdlib 与轻依赖；重依赖（pandas /
+> lumibot / 交易所 SDK…）必须放在 `register_routes` / `sections` / `mcp_specs`
+> 函数体内 —— `squad_config_sync` 会在启动早期 import 每个模块的 plugin 模块。
 
 ### 2.1 渲染原子
 
@@ -123,6 +141,7 @@ Row(label: str, desc: str = "", status: str = "", link: str = "")
 | 版本 | 日期 | 说明 |
 |---|---|---|
 | 1 | 2026-11-17 | 首版：Module 对象、Section/Row 原子、entry point 发现、命名空间、失败隔离；同日完成路由插件化、会话 sections() 渲染与旧白名单下线 |
+| 1.1 | 2026-11-18 | 新增**可选**钩子 `mcp_specs(ctx)`：模块可声明自己的 MCP server（Legion 不再硬编码 `nanobot_quant.mcp_spec`）；可选能力不升 `sdk`，旧模块不受影响 |
 
 ---
 

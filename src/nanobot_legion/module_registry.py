@@ -22,7 +22,8 @@ class ModuleContext:
 
     - ``data_root``：持久化卷根目录（所有路径均由模块自己拼）
     - ``gatekeeper``：过渡期兼容句柄，仅用于既有 ``register_xxx_routes(app, gk)``
-      签名；新模块不应依赖
+      签名；新模块不应依赖。**可能为 ``None``** —— ``squad_config_sync``（独立短进程）
+      调用 ``mcp_specs(ctx)`` 时没有网关实例，钩子不得依赖该字段
     - ``log``：写网关日志（stderr / gatekeeper 日志）
     - ``data_dir`` / ``credentials_dir`` / ``files_dir``：按契约分配的模块专属目录
       （访问时按需创建）
