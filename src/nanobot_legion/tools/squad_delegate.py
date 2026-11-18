@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import uuid
 
@@ -43,11 +44,20 @@ mcp = FastMCP("squad-delegate")
 
 # ── mode enforcement ──────────────────────────────────────
 
-# Maps trading mode → squad agent name
-MODE_TO_AGENT = {
+# 默认「交易模式 → agent」映射（quand 空间零回归）。
+# 可由 squad_config.json 的顶层 ``mode_map`` 覆盖：
+#   - 键缺失 → 用本默认值
+#   - 显式 ``{}`` → 关闭门控（非交易类空间）
+#   - 类型非法 → 回退默认值并告警
+DEFAULT_MODE_MAP = {
     "quant": "quant",
     "research": "vt_research",
 }
+
+
+def _warn(msg: str) -> None:
+    """诊断输出走 stderr（stdout 是 MCP JSON-RPC 通道，不能污染）。"""
+    print(f"[squad-delegate] {msg}", file=sys.stderr, flush=True)
 
 
 def _mode_path() -> str:
@@ -57,13 +67,49 @@ def _mode_path() -> str:
     return os.path.join(data_root, "legion", "mode.json")
 
 
-def _read_mode() -> str:
-    """Read current trading mode, default 'quant'."""
+def _mode_map() -> dict:
+    """生效的「模式 → agent」映射（squad_config.json 的 mode_map）。
+
+    键缺失 = 默认值（兼容现有空间）；空 dict = 显式关闭门控；
+    非 dict / 非法项 = 回退默认值并告警（fail-safe，不静默）。
+    """
+    try:
+        raw = load_config().get("mode_map", None)
+    except Exception as e:  # noqa: BLE001
+        _warn(f"mode_map 读取失败，用默认映射: {type(e).__name__}: {e}")
+        return dict(DEFAULT_MODE_MAP)
+    if raw is None:
+        return dict(DEFAULT_MODE_MAP)
+    if not isinstance(raw, dict):
+        _warn(f"mode_map 类型非法（{type(raw).__name__}），用默认映射")
+        return dict(DEFAULT_MODE_MAP)
+
+    out = {}
+    for k, v in raw.items():
+        if isinstance(k, str) and isinstance(v, str) and k.strip() and v.strip():
+            out[k.strip()] = v.strip()
+        else:
+            _warn(f"mode_map 项非法已忽略: {k!r} → {v!r}")
+    return out
+
+
+def _read_mode() -> str | None:
+    """读 WebUI 保存的交易模式。
+
+    文件缺失 / 坏 JSON / 空值 → ``None``（不再伪造 "quant"）；
+    调用方用 ``_effective_mode()`` 决定缺省行为。
+    """
     try:
         with open(_mode_path()) as f:
-            return json.load(f).get("mode", "quant")
+            mode = (json.load(f).get("mode") or "").strip()
+            return mode or None
     except Exception:
-        return "quant"
+        return None
+
+
+def _effective_mode(mode_map: dict) -> str | None:
+    """生效模式 = 已保存的模式；未保存则取 mode_map 首键（默认 map 下即 quant）。"""
+    return _read_mode() or (next(iter(mode_map), None) if mode_map else None)
 
 
 # ── config resolution ─────────────────────────────────────
@@ -179,15 +225,28 @@ def _deliver_via_ws(target_agent: str, target_id: str, ws_port: int,
 async def get_trading_mode() -> str:
     """Read the current trading mode from WebUI settings.
 
-    Returns JSON with the current mode and the expected agent.
+    Returns JSON with the effective mode, the expected agent, whether the
+    delegation gate would actually reject, and a ``hint`` when the mode has
+    never been saved (Legion no longer fabricates "quant" silently).
     Use this before any trading-related delegation to know which agent to target.
     """
-    mode = _read_mode()
-    agent = MODE_TO_AGENT.get(mode, "quant")
-    return json.dumps({
+    mode_map = _mode_map()
+    saved = _read_mode()
+    mode = saved or (next(iter(mode_map), None) if mode_map else None)
+    agent = mode_map.get(mode) if mode else None
+    payload = {
         "mode": mode,
         "expected_agent": agent,
-    })
+        "enforced": bool(mode_map) and agent is not None,
+        "mode_map_keys": list(mode_map),
+        "saved": saved is not None,
+    }
+    if saved is None:
+        payload["hint"] = (
+            f"尚未保存交易模式，当前按 mode_map 首键（{mode or '无'}）处理，"
+            "请在 /config/mode 选择并保存"
+        )
+    return json.dumps(payload, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -211,10 +270,24 @@ async def delegate_to_agent(
         JSON with status, response, and enforcement details.
     """
     # ── mode enforcement gate ──
+    # mode_map 空 → 关闭门控；模式未知 → 不拦（避免非交易空间被锁死）；
+    # 命中且目标不匹配 → 拒绝（风险门保留，行为与改造前一致）。
+    enforcement = {}
     if enforce_mode:
-        current_mode = _read_mode()
-        expected = MODE_TO_AGENT.get(current_mode, "quant")
-        if target_agent.lower() != expected.lower():
+        mode_map = _mode_map()
+        current_mode = _effective_mode(mode_map)
+        expected = mode_map.get(current_mode) if current_mode else None
+        if not mode_map:
+            enforcement = {"enforced": False, "skipped": "未配置 mode_map"}
+            _warn("enforce_mode 已跳过：未配置 mode_map（门控关闭）")
+        elif expected is None:
+            enforcement = {
+                "enforced": False,
+                "skipped": f"未知模式 {current_mode}",
+                "current_mode": current_mode,
+            }
+            _warn(f"enforce_mode 已跳过：未知模式 {current_mode!r}")
+        elif target_agent.lower() != expected.lower():
             return json.dumps({
                 "status": "rejected",
                 "error": (
@@ -227,6 +300,12 @@ async def delegate_to_agent(
                 "expected_agent": expected,
                 "requested_agent": target_agent,
             })
+        else:
+            enforcement = {
+                "enforced": True,
+                "current_mode": current_mode,
+                "expected_agent": expected,
+            }
 
     target_id, ws_port = _resolve_target(target_agent)
     if not target_id or not ws_port:
@@ -235,7 +314,16 @@ async def delegate_to_agent(
             "error": f"agent '{target_agent}' not found in squad roster"
         })
 
-    return _deliver_via_ws(target_agent, target_id, ws_port, message, timeout_seconds)
+    result = _deliver_via_ws(target_agent, target_id, ws_port, message, timeout_seconds)
+    if enforcement:
+        try:
+            payload = json.loads(result)
+            if isinstance(payload, dict):
+                payload["mode_enforcement"] = enforcement
+                return json.dumps(payload, ensure_ascii=False)
+        except Exception:  # noqa: BLE001 - 非 JSON 返回原样透传
+            pass
+    return result
 
 
 # ── run_research_swarm ────────────────────────────────────
@@ -340,7 +428,7 @@ async def run_research_swarm(
             "status": "rejected",
             "error": (
                 f"run_research_swarm requires Research mode, "
-                f"but current mode is '{current_mode}'. "
+                f"but current mode is '{current_mode or '未保存'}'. "
                 f"Switch mode in WebUI or use delegate_to_agent directly."
             ),
             "current_mode": current_mode,
