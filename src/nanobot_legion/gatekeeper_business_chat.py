@@ -85,7 +85,7 @@ def _core_block(data_root: str) -> str:
 
 
 def _build_module_content(gatekeeper, modules, log) -> str | None:
-    """核心区块 + 各模块 sections() 渲染；全部模块渲染失败返回 None（走兜底）。"""
+    """核心区块 + 各模块 sections() 渲染；全部模块未声明内容时返回 None。"""
     root = _resolve_data_root(gatekeeper) or ""
     parts = [_core_block(root)]
     rendered_any = False
@@ -189,12 +189,12 @@ def _write_chat(gatekeeper, content: str) -> str:
 
 
 def ensure_business_management_chat(gatekeeper) -> None:
-    """重建「业务管理」置顶会话：模块优先，未发现模块时回退旧硬编码。"""
+    """重建「业务管理」置顶会话：内容全部来自模块 sections()，无模块则不建。"""
     log = gatekeeper._log
     try:
         modules = discover_modules(log=log)
     except Exception as e:  # noqa: BLE001 - 发现层异常不得阻塞启动
-        msg = f"⚠️ 模块发现异常（业务管理 chat 走兜底）: {type(e).__name__}: {e}"
+        msg = f"⚠️ 模块发现异常（本次不建业务管理 chat）: {type(e).__name__}: {e}"
         log(msg)
         _stderr(msg)
         modules = []

@@ -25,21 +25,6 @@ from mcp.server.fastmcp import FastMCP
 
 from nanobot_legion.squad_config_loader import load_config
 
-# ── onchainos pre-fetch (optional, only needed for run_research_swarm) ──
-
-try:
-    from nanobot_quant.onchainos_cli import (
-        extract_symbol as _extract_symbol,
-        format_risk_level as _format_risk_level,
-        get_advanced_info as _get_advanced_info,
-        get_holders as _get_holders,
-        get_price as _get_price,
-        search_token as _search_token,
-    )
-    _HAS_ONCHAINOS_CLI = True
-except ImportError:
-    _HAS_ONCHAINOS_CLI = False
-
 mcp = FastMCP("squad-delegate")
 
 # ── mode enforcement ──────────────────────────────────────
@@ -346,71 +331,20 @@ def _normalize_pair(raw: str) -> str:
     return f"{stripped}-USDT"
 
 
-def _pre_fetch_onchainos(symbol: str) -> dict:
-    """Pre-fetch onchain data for a bare symbol. Returns {ok, errors, data}."""
-    errors: list[str] = []
-    data: dict[str, object] = {}
-
-    if not _HAS_ONCHAINOS_CLI:
-        return {"ok": False, "errors": ["onchainos_cli module not available"], "data": data}
-
-    # ① search token → address
-    addr = _search_token(symbol)
-    if not addr:
-        errors.append(f"token '{symbol}' not found on chain")
-        return {"ok": False, "errors": errors, "data": data}
-    data["address"] = addr
-
-    # ② market price
-    price_val = _get_price(addr)
-    if price_val:
-        data["price"] = price_val
-    else:
-        errors.append("price unavailable")
-
-    # ③ advanced-info (risk)
-    risk_raw = _get_advanced_info(addr)
-    if risk_raw:
-        try:
-            data["risk"] = _format_risk_level(risk_raw)
-        except Exception:
-            errors.append("risk parse failed")
-    else:
-        errors.append("risk unavailable")
-
-    # ④ holders (top 100)
-    holders = _get_holders(addr)
-    if holders:
-        data["holders_count"] = len(holders)
-        # Collect top-10 hold percent
-        top_hold = sum(
-            float(h.get("holdPercent", 0)) for h in holders[:10]
-            if isinstance(h, dict)
-        )
-        data["top10_hold_pct"] = round(top_hold, 1)
-    else:
-        errors.append("holders unavailable")
-
-    return {
-        "ok": len(data) > 0,
-        "errors": errors,
-        "data": data,
-    }
-
-
 @mcp.tool()
 async def run_research_swarm(
     symbol: str,
     max_iterations: int = 50,
     timeout_seconds: int = 300,
 ) -> str:
-    """Run VT swarm investment committee analysis with onchain data pre-fetch.
+    """Run VT swarm investment committee analysis (Research-mode entry point).
 
-    THIS is the Research-mode entry point. It:
+    It:
     1. Checks mode.json → rejects if not 'research' mode
     2. Normalizes symbol (BTC → BTC-USDT)
-    3. Pre-fetches onchain data (price, risk, holders) via onchainos CLI
-    4. Builds enriched variables and delegates to vt_research
+    3. Delegates to vt_research's ``run_research_chain``（swarm + structurize
+       + TD 校验 + 执行全在目标 agent 内完成；链上富集由 VT grounding 提供，
+       本工具不直依赖任何具体业务包）
 
     Parameters:
         symbol: Token symbol, e.g. "BTC", "SPCX", "ETH-USD"
@@ -419,7 +353,7 @@ async def run_research_swarm(
                          after launch, this just waits for the run_id)
 
     Returns:
-        JSON with run_id, pre_fetch result, and status.
+        JSON with run_id and status.
     """
     # ━━ ① mode check ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     current_mode = _read_mode()
@@ -437,29 +371,13 @@ async def run_research_swarm(
     # ━━ ② symbol normalize ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     pair = _normalize_pair(symbol)
 
-    # ━━ ③ onchainos pre-fetch ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    bare = pair.split("-")[0].split(".")[0] if "-" in pair or "." in pair else pair
-    pre_fetch = _pre_fetch_onchainos(bare)
-
-    # ━━ ④ build variables for swarm ━━━━━━━━━━━━━━━━━━━━━━━━
-    variables: dict[str, object] = {
-        "target": pair,
-        "market": "crypto" if not any(
-            bare.endswith(f".{ex}") for ex in ("US", "HK", "L")
-        ) else "stock",
-        "max_iterations": str(max_iterations),
-    }
-    if pre_fetch["ok"]:
-        variables["onchainos"] = pre_fetch["data"]
-
-    # ━━ ⑤ WS delegate → vt_research ━━━━━━━━━━━━━━━━━━━━━━━
+    # ━━ ③ WS delegate → vt_research ━━━━━━━━━━━━━━━━━━━━━━━
     target_agent = "vt_research"
     target_id, ws_port = _resolve_target(target_agent)
     if not target_id or not ws_port:
         return json.dumps({
             "status": "error",
             "error": f"agent '{target_agent}' not found in squad roster",
-            "pre_fetch": pre_fetch,
         })
 
     message = (
@@ -476,13 +394,12 @@ async def run_research_swarm(
     )
     result_raw = _deliver_via_ws(target_agent, target_id, ws_port, message, timeout_seconds)
 
-    # ━━ ⑥ parse and return ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # ━━ ④ parse and return ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     try:
         result = json.loads(result_raw)
     except Exception:
         result = {"status": "parse_error", "raw": result_raw[:500]}
 
-    result["pre_fetch"] = pre_fetch
     result["symbol"] = pair
     return json.dumps(result, ensure_ascii=False)
 

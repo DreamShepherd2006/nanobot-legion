@@ -159,8 +159,7 @@ def test_run_research_swarm_rejects_non_research(env, monkeypatch):
 def test_run_research_swarm_accepts_research(env, monkeypatch):
     _cfg(monkeypatch)
     env.write_text(json.dumps({"mode": "research"}))
-    # 只验证模式门通过：后续需要 onchainos/WS，mock 掉重活
-    monkeypatch.setattr(sd, "_pre_fetch_onchainos", lambda sym: {"ok": False, "errors": [], "data": {}})
+    # 只验证模式门通过：后续需要 WS，mock 掉重活
     monkeypatch.setattr(sd, "_deliver_via_ws", lambda *a, **k: json.dumps({"status": "ok"}))
     out = json.loads(asyncio.run(sd.run_research_swarm("BTC")))
     assert out.get("status") != "rejected"

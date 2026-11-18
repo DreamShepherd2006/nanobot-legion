@@ -79,7 +79,7 @@ def register_modules(app, gatekeeper, data_root: str | None = None, log=None) ->
     emit = log if callable(log) else (lambda m: None)
     modules = discover_modules(log=emit)
     if not modules:
-        emit("ℹ️ 未发现 Legion Module（业务页面走调用方兜底路径）")
+        emit("ℹ️ 未发现 Legion Module（不挂载任何业务页面）")
         return []
 
     root = data_root or _resolve_data_root(gatekeeper)

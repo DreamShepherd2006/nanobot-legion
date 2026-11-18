@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import importlib
 import sys
 from dataclasses import dataclass
 
@@ -18,9 +17,6 @@ MODULE_ENTRY_GROUP = "nanobot_legion.modules"
 
 #: 当前支持的契约版本（模块 ``sdk`` 不一致即拒载）
 SDK_VERSION = 1
-
-#: 兼容兜底：早期安装的模块未声明 entry point 时按约定名加载
-LEGACY_ENTRY = "nanobot_quant.legion_plugin:MODULE"
 
 REQUIRED_ATTRS = ("name", "display", "sdk", "route_prefix", "register_routes", "sections")
 
@@ -97,25 +93,12 @@ def _to_loaded(obj, source: str, log) -> LoadedModule | None:
     )
 
 
-def _load_legacy(log) -> LoadedModule | None:
-    """按约定名加载模块（老安装方式，无 entry point）。"""
-    module_path, _, attr = LEGACY_ENTRY.partition(":")
-    try:
-        mod = importlib.import_module(module_path)
-        obj = getattr(mod, attr)
-    except Exception as e:  # noqa: BLE001 - 未安装属正常情况
-        log(f"ℹ️ 未发现 Legion Module（entry point 与兜底 {LEGACY_ENTRY} 均不可用: {type(e).__name__}）")
-        return None
-    loaded = _to_loaded(obj, LEGACY_ENTRY, log)
-    if loaded:
-        log(f"ℹ️ 通过兜底路径加载模块 {loaded.name}（建议模块声明 entry point {MODULE_ENTRY_GROUP}）")
-    return loaded
-
-
 def discover_modules(log=_default_log) -> list[LoadedModule]:
     """发现并校验全部模块。
 
-    同名模块只保留第一个并告警；全部失败时不回退（由调用方决定是否走旧白名单）。
+    同名模块只保留第一个并告警；一个都没装时返回空列表（网关照常启动，
+    仅无业务页面）——**不做任何按约定名的隐式加载**，避免新部署被旧业务
+    系统牵连。
     """
     found: dict[str, LoadedModule] = {}
     for ep in _iter_entry_points():
@@ -133,8 +116,6 @@ def discover_modules(log=_default_log) -> list[LoadedModule]:
         found[loaded.name] = loaded
 
     if not found:
-        legacy = _load_legacy(log)
-        if legacy:
-            found[legacy.name] = legacy
+        log(f"ℹ️ 未发现 Legion Module（entry point {MODULE_ENTRY_GROUP} 下没有任何可用模块）")
 
     return [found[name] for name in sorted(found)]

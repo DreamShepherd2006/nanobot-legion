@@ -389,14 +389,13 @@ def _modules_for_sync():
     return _SYNC_MODULES
 
 
-def _collect_mcp_specs(modules=None, legacy_discover=None) -> dict:
+def _collect_mcp_specs(modules=None) -> dict:
     """聚合各模块声明的 MCP server。
 
     - 可选钩子：模块未实现 ``mcp_specs(ctx)`` 即不提供 MCP 工具（不是错误）
     - 跨模块重名 → 先到先得并告警；单模块异常只跳过该模块
-    - 兼容回退：**没有任何模块声明钩子**时才回退到旧的
-      ``nanobot_quant.mcp_spec.discover()``（下个 minor 版本移除）
-    - 全程可见：来源、跳过原因、兼容路径都会打日志，不静默
+    - 零回退：不再回退到任何具体应用的私有模块（旧业务系统不再是隐式依赖）
+    - 全程可见：来源、跳过原因、单模块失败都会打日志，不静默
     """
     if modules is None:
         modules = _modules_for_sync()
@@ -405,13 +404,11 @@ def _collect_mcp_specs(modules=None, legacy_discover=None) -> dict:
     owner: dict = {}
     sources: list[str] = []
     notes: list[str] = []
-    hook_seen = False
 
     for mod in modules or []:
         hook = getattr(getattr(mod, "obj", None), "mcp_specs", None)
         if not callable(hook):
             continue
-        hook_seen = True
         try:
             from nanobot_legion.module_registry import ModuleContext
 
@@ -447,27 +444,9 @@ def _collect_mcp_specs(modules=None, legacy_discover=None) -> dict:
         if added:
             sources.append(f"{mod.name}({added})")
 
-    # 兼容回退：仅当所有模块都没声明钩子（＝旧版模块集合）时才走硬 import
-    if not specs and not hook_seen:
-        if legacy_discover is None:
-            try:
-                from nanobot_quant.mcp_spec import discover as legacy_discover
-            except Exception:  # noqa: BLE001 - 未安装属正常情况
-                legacy_discover = None
-        if legacy_discover is not None:
-            try:
-                specs = dict(legacy_discover() or {})
-            except Exception as e:  # noqa: BLE001
-                notes.append(f"⚠️ 兼容回退失败: {type(e).__name__}: {e}")
-            else:
-                if specs:
-                    sources.append(f"legacy:nanobot_quant({len(specs)})")
-                    notes.append(
-                        "⚠️ 兼容路径：没有模块声明 mcp_specs()，已回退到 "
-                        "nanobot_quant.mcp_spec（请升级模块；下个 minor 版本移除）"
-                    )
-        if not specs:
-            notes.append("ℹ️ 跳过 MCP 注入：没有模块声明 mcp_specs()")
+    # 零回退：没有任何模块声明钩子 ⇒ 明确跳过（不再尝试任何具体应用的私有模块）
+    if not specs:
+        notes.append("ℹ️ 跳过 MCP 注入：没有模块声明 mcp_specs()")
 
     for note in notes:
         _log(f"     {note}")
@@ -480,8 +459,8 @@ def inject_mcp_from_specs(cfg_path: str, inst_name: str = "", specs: dict | None
     """Inject MCP server configs declared by Legion Modules.
 
     Specs come from each module's optional ``mcp_specs(ctx)`` hook (aggregated
-    by ``_collect_mcp_specs``); the legacy ``nanobot_quant.mcp_spec`` import is
-    only used as a compatibility fallback.
+    by ``_collect_mcp_specs``); 没有任何模块声明钩子时不做 MCP 注入
+    （不回退到任何具体业务包的私有模块）。
     ``specs`` 由调用方（``sync_configs``）整轮采集一次后传入，避免逐实例重复
     采集与重复日志；传 None 时行为与旧版一致（自行采集，兼容单独调用）。
     Filters by MCPSpec.target_agents: specs without target_agents are
@@ -529,7 +508,7 @@ def inject_mcp_from_specs(cfg_path: str, inst_name: str = "", specs: dict | None
 
         _resolved_env = _resolve_mcp_env(cfg, _spec)
         # 工具调用超时（nanobot 侧 MCPServerConfig.tool_timeout，上游默认 30s）。
-        # 用 getattr 兼容旧版 quant 的 MCPSpec（无该字段时保持上游默认）。
+        # 用 getattr 兼容未声明该字段的模块 MCPSpec（则保持上游默认 30s）。
         _tool_timeout = getattr(_spec, "tool_timeout", None)
 
         if _name not in _existing:
